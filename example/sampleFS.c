@@ -128,13 +128,43 @@ static int SFS_read(const char *path, char *buf, size_t size, off_t offset,
 	return size;
 }
 
+int SFS_mkdir(struct fuse_fs *fs, const char *path, mode_t mode)
+{
+
+}
+
+int SFS_rmdir(struct fuse_fs *fs, const char *path)
+{
+
+}
+
+int SFS_mknod(struct fuse_fs *fs, const char *path, mode_t mode,dev_t rdev)
+{
+
+}
+
+int SFS_write(struct fuse_fs *fs, const char *path, const char *buf,
+		  size_t size, off_t off, struct fuse_file_info *fi)
+ {
+
+ }
+
+int SFS_unlink(struct fuse_fs *fs, const char *path)
+{
+
+}
+
 static const struct fuse_operations hello_oper = {
-	.init           = SFS_init,
+	.init       = SFS_init,
 	.getattr	= SFS_getattr,
 	.readdir	= SFS_readdir,
 	.open		= SFS_open,
 	.read		= SFS_read,
-    
+    .mkdir      = SFS_mkdir,
+    .rmdir      = SFS_rmdir,
+    .mknod      = SFS_mknod,
+    .write      = SFS_write,
+    .unlink     = SFS_unlink
 };
 
 static void show_help(const char *progname)
