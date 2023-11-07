@@ -1,0 +1,11 @@
+prefix=/home/krxk/fuse-3.16.2/build
+srcdir=/home/krxk/fuse-3.16.2
+libdir=${prefix}/lib/x86_64-linux-gnu
+includedir=${prefix}/include
+
+Name: fuse3
+Description: Filesystem in Userspace
+Version: 3.16.2
+Libs: -L${prefix}/lib -lfuse3 -lpthread
+Libs.private: -ldl -pthread -lrt
+Cflags: -I${prefix}/lib -I${srcdir}/lib -I${prefix}/include -I${srcdir}/include -I${prefix} -I${srcdir}
