@@ -1,0 +1,11 @@
+{
+    "files.associations": {
+        "fcntl.h": "c",
+        "assert.h": "c",
+        "stddef.h": "c",
+        "fuse_lowlevel.h": "c",
+        "samplefs.h": "c",
+        "malloc.h": "c",
+        "cstdio": "c"
+    }
+}
