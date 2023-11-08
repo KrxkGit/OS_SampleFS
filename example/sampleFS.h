@@ -6,9 +6,14 @@
 #include <stddef.h>
 #include <assert.h>
 #include <malloc.h>
+#include <unistd.h>
+#include <time.h>
 
-char imgPath[] = "./SFS_Img"; // 设备载体
+/*注意：inode number 为 0 时为非法，用于作为判断标记*/
 
+char imgPath[] = "/home/krxk/fuse-3.16.2/build/example/SFS_Img"; // 设备载体
+
+#define max_child_count 20 // 目录下最大子文件数量
 const int fs_bl_size = 512; // 块的大小(Bytes)
 
 // 下列为各个区域所用块数
@@ -37,6 +42,15 @@ inline int getInodeOffset()
 inline int getDataOffset()
 {
     return getInodeBitmapOffset() + inode_count * fs_bl_size;
+}
+// 二层封装
+inline int getDataOffsetByNum(int n)
+{
+    return getDataOffset() + n * fs_bl_size;
+}
+inline int getInodeOffsetByNum(int n)
+{
+    return getInodeOffset() + n * fs_bl_size;
 }
 
 struct sb { // 超级块
@@ -98,7 +112,7 @@ struct inode {
     off_t st_size; /*文件大小，4字节 */ 
     struct timespec st_atim; /* 16个字节time of last access */ 
     short int addr [7];    /*磁盘地址，14字节。addr[0]-addr[3]是直接地址，addr[4]是一次间接，addr[5]是二次间接，addr[6]是三次间接。
-    为了方便，此处使用相对地址，即相对数据区头部的偏移！**/
+    为了方便，此处使用相对地址，即相对数据区头部的偏移！由于文件对应的数据块不一定是连续的，所以每个指针指向一个块地址。**/
     char __reserve[17]; // 填充为 64 字节 
 };
 
@@ -107,7 +121,14 @@ struct dentry // 由于目录本质上也是一种文件，故文件也采用此
     char fileName[8]; // 文件名
     char postFix[3]; // 扩展名
     short int inodeNo; // inode 号，实际使用12位
-    char __reserve[3]; // 保留备用
+    short int childInodeNo[max_child_count]; // 子文件iNode 号
 };
 
-typedef struct dentry dfileObj; // 重定义文件对象
+struct fileObj { // 文件头部
+    char fileName[8]; // 文件名
+    char postFix[3]; // 扩展名
+    short checksum; // 根据文件头部信息生成的校验和，用于区分是否为一个文件或目录
+};
+
+// 文件系统状态量区
+short int pwdInodeNo; // 标记当前目录的inode号

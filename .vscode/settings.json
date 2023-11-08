@@ -7,5 +7,6 @@
         "samplefs.h": "c",
         "malloc.h": "c",
         "cstdio": "c"
-    }
+    },
+    "C_Cpp.default.compilerPath": "/usr/bin/gcc"
 }

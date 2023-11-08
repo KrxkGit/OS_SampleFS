@@ -99,6 +99,10 @@ void InitFirstDEntry(FILE* fp) // 初始化根目录到数据区
   strcpy(dirPtr->fileName,"/");
   strcpy(dirPtr->postFix, "");
   dirPtr->inodeNo = 1;
+  for(int i = 0; i < max_child_count; i++) {
+    dirPtr->childInodeNo[i] = 0; // 标记没有子文件
+  }
+
   fwrite(dirPtr, sizeof(struct dentry), 1, fp);
   
   fflush(fp);
