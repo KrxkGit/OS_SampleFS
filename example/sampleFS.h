@@ -75,8 +75,16 @@ void setBitmapValue(char* bytes ,int bit ,int Value)
     int n = bit/8;
     int r = bit - 8 * n;
     r -= 1;
-    char t = Value << r;
-    bytes[n] = bytes[n] ^ t;
+    char t = 1 << r;
+
+    if(Value == 0) {
+        t = ~t;
+        bytes[n] = bytes[n] & t;
+       
+    } else {
+        bytes[n] = bytes[n] | t;
+    }
+   
 }
 
 
