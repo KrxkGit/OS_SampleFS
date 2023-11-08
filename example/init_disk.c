@@ -29,13 +29,13 @@
 void InitSuperBlock(struct sb* super_blk)
 {
   super_blk->fs_size = 8 * 1024 * 1024  / fs_bl_size;  //文件系统的大小，以块为单位
-  super_blk->first_blk= 1;  //数据区的第一块块号，根目录也放在此
+  super_blk->first_blk= getDataOffset() / fs_bl_size;  //数据区的第一块块号，根目录也放在此
   super_blk->datasize = dataBlock_count;  //数据区大小，以块为单位 
   super_blk->first_inode = 1;    //inode区起始块号
   super_blk->inode_area_size = inode_count;   //inode区大小，以块为单位
-  super_blk->fisrt_blk_of_inodebitmap = 1;   //inode位图区起始块号
+  super_blk->fisrt_blk_of_inodebitmap = getInodeBitmapOffset() / fs_bl_size;   //inode位图区起始块号
   super_blk->inodebitmap_size = inodeBitmap_count;  // inode位图区大小，以块为单位
-  super_blk->first_blk_of_databitmap = 1;   //数据块位图起始块号
+  super_blk->first_blk_of_databitmap = getDataBitmapOffset() / fs_bl_size;   //数据块位图起始块号
   super_blk->databitmap_size = dataBitmap_count;      //数据块位图大小，以块为单位
 }
 
@@ -67,14 +67,16 @@ void InitFirstInode(FILE *fp)
   }
 
   // 考虑到文件系统较小，为了简化问题且提高读取效率，一次性读取整个 bitmap
+
+  // 标记根目录的inode位图
   struct bitmap_inode* bi = malloc(sizeof(struct bitmap_inode));
-  if(fseek(fp, getInodeBitmapOffset(), SEEK_SET) != 0) {
-    fprintf(stderr ,"Read fist inode failed");
+  if(fseek(fp, getInodeBitmapOffset(), SEEK_SET) != 0) { // 标记Inode位图
+    fprintf(stderr ,"Read fist inode failed"); 
     return;
   }
   fread(bi, sizeof(struct bitmap_inode), 1, fp);
-  setBitmapValue(bi, 1, 1);
-    if(fseek(fp, getInodeBitmapOffset(), SEEK_SET) != 0) {
+  setBitmapValue(bi, 1, 1); // 关键代码
+  if(fseek(fp, getInodeBitmapOffset(), SEEK_SET) != 0) { // 重新定位指针
     fprintf(stderr ,"Write fist inode failed");
     return;
   }
@@ -83,6 +85,26 @@ void InitFirstInode(FILE *fp)
   free(bi);
 
   fseek(fp, savePtr, SEEK_SET); // 还原指针位置
+}
+
+void InitFirstDEntry(FILE* fp) // 初始化根目录到数据区
+{
+  int savePtr = ftell(fp);
+
+  struct dentry* dirPtr = malloc(sizeof(struct dentry));
+  if(fseek(fp, getDataOffset(), SEEK_SET) != 0) {
+    fprintf(stderr, "Init First Directory Entry failed.\n");
+    return;
+  }
+  strcpy(dirPtr->fileName,"/");
+  strcpy(dirPtr->postFix, "");
+  dirPtr->inodeNo = 1;
+  fwrite(dirPtr, sizeof(struct dentry), 1, fp);
+  
+  fflush(fp);
+  free(dirPtr);
+
+  fseek(fp, savePtr, SEEK_SET); // 还原文件指针位置
 }
 
 int main(int argc, char *argv[])
@@ -127,16 +149,16 @@ int main(int argc, char *argv[])
       fprintf(stderr, "Inode Block seek failed.\n");
   }
 
-
   // 初始化第一个inode
   InitFirstInode(fp);
 
   block_count_ptr += inode_count;
 
-  // Inode 区；数据区: 等待填充
+  // Inode 区；数据区: 填充根目录到数据区
   if(MoveBlockPtr(fp, block_count_ptr) != 0) {
       fprintf(stderr, "Data Block seek failed.\n");
   }
+  InitFirstDEntry(fp);
   
   fclose(fp);
   printf("Init disk successfully!\n");

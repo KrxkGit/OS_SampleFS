@@ -26,22 +26,22 @@ inline int getInodeBitmapOffset()
 {
     return sb_count * fs_bl_size;
 }
-inline getDataBitmapOffset()
+inline int getDataBitmapOffset()
 {
     return getInodeBitmapOffset() + inodeBitmap_count * fs_bl_size;
 }
-inline getInodeOffset()
+inline int getInodeOffset()
 {
     return getDataBitmapOffset() + dataBitmap_count * fs_bl_size;
 }
-inline getDataOffset()
+inline int getDataOffset()
 {
     return getInodeBitmapOffset() + inode_count * fs_bl_size;
 }
 
 struct sb { // 超级块
     long fs_size;  //文件系统的大小，以块为单位
-    long first_blk;  //数据区的第一块块号，根目录也放在此
+    long first_blk;  //数据区的第一块块号，根目录也放在此（修改为根目录inode放在inode区）
     long datasize;  //数据区大小，以块为单位 
     long first_inode;    //inode区起始块号
     long inode_area_size;   //inode区大小，以块为单位
@@ -102,10 +102,12 @@ struct inode {
     char __reserve[17]; // 填充为 64 字节 
 };
 
-struct dentry
+struct dentry // 由于目录本质上也是一种文件，故文件也采用此结构体
 {
-    char fileName[8];
-    char postFix[3];
-    char inodeNo[2]; // inode 号，实际使用12位
+    char fileName[8]; // 文件名
+    char postFix[3]; // 扩展名
+    short int inodeNo; // inode 号，实际使用12位
     char __reserve[3]; // 保留备用
 };
+
+typedef struct dentry dfileObj; // 重定义文件对象
