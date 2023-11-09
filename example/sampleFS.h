@@ -22,86 +22,8 @@ const int inodeBitmap_count = 1;
 const int dataBitmap_count = 4;
 const int inode_count = 512;
 const int dataBlock_count = 15866; // 8*1024*1024/512-1-1-4-512=15866
-// 辅助函数： 返回区域头部距离文件系统头部的偏移量：单位（字节）.采用 inline 提高效率减少递归并保持扩展性
-inline int getSuperBlockOffset()
-{
-    return 0;
-}
-inline int getInodeBitmapOffset()
-{
-    return sb_count * fs_bl_size;
-}
-inline int getDataBitmapOffset()
-{
-    return getInodeBitmapOffset() + inodeBitmap_count * fs_bl_size;
-}
-inline int getInodeOffset()
-{
-    return getDataBitmapOffset() + dataBitmap_count * fs_bl_size;
-}
-inline int getDataOffset()
-{
-    return getInodeBitmapOffset() + inode_count * fs_bl_size;
-}
-// 二层封装
-inline int getDataOffsetByNum(int n)
-{
-    return getDataOffset() + n * fs_bl_size;
-}
-inline int getInodeOffsetByNum(int n)
-{
-    return getInodeOffset() + n * fs_bl_size;
-}
 
-struct sb { // 超级块
-    long fs_size;  //文件系统的大小，以块为单位
-    long first_blk;  //数据区的第一块块号，根目录也放在此（修改为根目录inode放在inode区）
-    long datasize;  //数据区大小，以块为单位 
-    long first_inode;    //inode区起始块号
-    long inode_area_size;   //inode区大小，以块为单位
-    long fisrt_blk_of_inodebitmap;   //inode位图区起始块号
-    long inodebitmap_size;  // inode位图区大小，以块为单位
-    long first_blk_of_databitmap;   //数据块位图起始块号
-    long databitmap_size;      //数据块位图大小，以块为单位
-};
-
-struct bitmap_inode {
-    char available[4 * 1024 / 8];
-};
-
-struct bitmap_dblock {
-    char available[2048]; // 8 * 1024* 1024 / 512 / 8 = 2048
-};
-
-// 辅助函数： 读取,设置第 n 个bit的标志。为了简化，不进行越界检查。
-// 注意： 从 1 开始编号，否则将越界
-int getBitmapValue(char* bytes,int bit) // 输入字节数组，获得指定节点的值
-{
-    int n = bit/8;
-    int r = bit - 8 * n;
-    r -= 1;
-    char c = bytes[n] >> r;
-    c = c & 1;
-    return (int)c;
-}
-void setBitmapValue(char* bytes ,int bit ,int Value)
-{
-    int n = bit/8;
-    int r = bit - 8 * n;
-    r -= 1;
-    char t = 1 << r;
-
-    if(Value == 0) {
-        t = ~t;
-        bytes[n] = bytes[n] & t;
-       
-    } else {
-        bytes[n] = bytes[n] | t;
-    }
-   
-}
-
-
+// 数据结构定义
 struct inode { 
     short int st_mode; /* 权限，2字节 */ 
     short int st_ino; /* i-node号，2字节，
@@ -130,5 +52,84 @@ struct fileObj { // 文件头部
     short checksum; // 根据文件头部信息生成的校验和，用于区分是否为一个文件或目录
 };
 
+struct sb { // 超级块
+    long fs_size;  //文件系统的大小，以块为单位
+    long first_blk;  //数据区的第一块块号，根目录也放在此（修改为根目录inode放在inode区）
+    long datasize;  //数据区大小，以块为单位 
+    long first_inode;    //inode区起始块号
+    long inode_area_size;   //inode区大小，以块为单位
+    long fisrt_blk_of_inodebitmap;   //inode位图区起始块号
+    long inodebitmap_size;  // inode位图区大小，以块为单位
+    long first_blk_of_databitmap;   //数据块位图起始块号
+    long databitmap_size;      //数据块位图大小，以块为单位
+};
+
+struct bitmap_inode {
+    char available[4 * 1024 / 8];
+};
+
+struct bitmap_dblock {
+    char available[2048]; // 8 * 1024* 1024 / 512 / 8 = 2048
+};
 // 文件系统状态量区
 short int pwdInodeNo; // 标记当前目录的inode号
+
+
+// 辅助函数： 返回区域头部距离文件系统头部的偏移量：单位（字节）.采用 inline 提高效率减少递归并保持扩展性
+inline int getSuperBlockOffset()
+{
+    return 0;
+}
+inline int getInodeBitmapOffset()
+{
+    return sb_count * fs_bl_size;
+}
+inline int getDataBitmapOffset()
+{
+    return getInodeBitmapOffset() + inodeBitmap_count * fs_bl_size;
+}
+inline int getInodeOffset()
+{
+    return getDataBitmapOffset() + dataBitmap_count * fs_bl_size;
+}
+inline int getDataOffset()
+{
+    return getInodeBitmapOffset() + inode_count * fs_bl_size;
+}
+// 二层封装
+inline int getDataOffsetByNum(int nBlock/*数据块编号*/)
+{
+    return getDataOffset() + nBlock * fs_bl_size;
+}
+inline int getInodeOffsetByNum(int iNodeNo/*inode编号*/)
+{
+    return getInodeOffset() + (iNodeNo - 1) * sizeof(struct inode);
+}
+
+// 辅助函数： 读取,设置第 n 个bit的标志。为了简化，不进行越界检查。
+// 注意： 从 1 开始编号，否则将越界
+int getBitmapValue(char* bytes,int bit) // 输入字节数组，获得指定节点的值
+{
+    int n = bit/8;
+    int r = bit - 8 * n;
+    r -= 1;
+    char c = bytes[n] >> r;
+    c = c & 1;
+    return (int)c;
+}
+void setBitmapValue(char* bytes ,int bit ,int Value)
+{
+    int n = bit/8;
+    int r = bit - 8 * n;
+    r -= 1;
+    char t = 1 << r;
+
+    if(Value == 0) {
+        t = ~t;
+        bytes[n] = bytes[n] & t;
+       
+    } else {
+        bytes[n] = bytes[n] | t;
+    }
+   
+}

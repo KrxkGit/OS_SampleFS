@@ -65,7 +65,7 @@ void InitFirstInode(FILE *fp)
   for (int i=0; i < 7 ; i++) {
     node->addr[i] = 0; /*磁盘地址，14字节。addr[0]-addr[3]是直接地址，addr[4]是一次间接，addr[5]是二次间接，addr[6]是三次间接。*/
   }
-
+  fwrite(node, sizeof(struct inode), 1, fp);
   // 考虑到文件系统较小，为了简化问题且提高读取效率，一次性读取整个 bitmap
 
   // 标记根目录的inode位图

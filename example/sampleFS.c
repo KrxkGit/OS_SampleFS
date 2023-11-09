@@ -107,7 +107,7 @@ void HelpConcatFileName(char* fileName, char* postFix, char* concat)
 int HelpFindFile(const char* fileName, short int startInodeNum, int goDeep/*是否继续下一层*/) 
 /*辅助查找文件，返回文件的inode号,判断成功条件：startInodeNum == 返回值*/
 {
-	printf("HelpFindFile is called\n");
+	printf("HelpFindFile is called\t fileName: %s\n", fileName);
 	int inodeOff = getInodeOffsetByNum(startInodeNum);
 	FILE* fp = fopen(imgPath, "r");
 	if(fp == NULL) {
@@ -203,7 +203,7 @@ int HelpWalkPath(const char *customPath, short int startInodeNum/*遍历的起�
 static int SFS_getattr(const char *path, struct stat *stbuf,
 			 struct fuse_file_info *fi)
 {
-	printf("运行");
+	printf("Get_attr\tPath:%s\n", path);
 	(void) fi;
 	int res = 0;
 	memset(stbuf, 0, sizeof(struct stat));
@@ -217,12 +217,18 @@ static int SFS_getattr(const char *path, struct stat *stbuf,
 	struct inode* ptrInode = malloc(sizeof(struct inode));
 
 	int startInodeNum = 1;
-	for(char* pNext = NULL; IsReachPathEnd(pNext);) {
+	for(char* pNext = path; IsReachPathEnd(pNext);) {
 		startInodeNum =  HelpWalkPath(pNext, startInodeNum, &pNext);
 		if(startInodeNum == -ENONET) {
 			// 找不到
 			return -ENOENT;
 		}
+	}
+	printf("startInodeNum:%d\n",startInodeNum);
+	if(startInodeNum == -ENOENT) { // 找不到
+		free(ptrInode);
+		fclose(fp);
+		return -ENOENT;
 	}
 
 	fseek(fp, getInodeOffsetByNum(startInodeNum), SEEK_SET);
@@ -230,6 +236,7 @@ static int SFS_getattr(const char *path, struct stat *stbuf,
 	fclose(fp);
 
 	HelpFillStat(stbuf, ptrInode);
+	printf("stbuf->st_ino:%d\n",stbuf->st_ino);
 	free(ptrInode);
 	// if (strcmp(path, "/") == 0) {
 	// 	fread(ptrInode, sizeof(struct inode), 1, fp);
@@ -352,7 +359,7 @@ int main(int argc, char *argv[])
 	/* Set defaults -- we have to use strdup so that
 	   fuse_opt_parse can free the defaults if other
 	   values are specified */
-	options.filename = strdup("SampleFS");
+	options.filename = strdup("/");
 	options.contents = strdup("Hello SampleFS!\n");
 
 	/* Parse options */
