@@ -65,6 +65,8 @@ void InitFirstInode(FILE *fp)
   for (int i=0; i < 7 ; i++) {
     node->addr[i] = 0; /*磁盘地址，14字节。addr[0]-addr[3]是直接地址，addr[4]是一次间接，addr[5]是二次间接，addr[6]是三次间接。*/
   }
+  node->addr[0] = 1; //设置根目录数据区号
+  fseek(fp, getInodeOffset(), SEEK_SET);
   fwrite(node, sizeof(struct inode), 1, fp);
   // 考虑到文件系统较小，为了简化问题且提高读取效率，一次性读取整个 bitmap
 
@@ -104,6 +106,14 @@ void InitFirstDEntry(FILE* fp) // 初始化根目录到数据区
   }
 
   fwrite(dirPtr, sizeof(struct dentry), 1, fp);
+
+  // 修改数据区位图
+  struct bitmap_dblock* ptrBd = malloc(sizeof(struct bitmap_dblock));
+  fseek(fp, getDataBitmapOffset(), SEEK_SET);
+  fread(ptrBd, sizeof(struct bitmap_dblock), 1, fp);
+  setBitmapValue(ptrBd, 1, 1);
+  fseek(fp, getDataBitmapOffset(), SEEK_SET);
+  fwrite(ptrBd, sizeof(struct bitmap_dblock), 1, fp);
   
   fflush(fp);
   free(dirPtr);
@@ -113,7 +123,7 @@ void InitFirstDEntry(FILE* fp) // 初始化根目录到数据区
 
 int main(int argc, char *argv[])
 {
-  printf("init_disk\nStart init %s", imgPath);
+  printf("init_disk\nStart init %s\n", imgPath);
   FILE* fp = fopen(imgPath, "r+");
   if(fp == NULL) {
     printf("Open img failed.\n");
@@ -144,7 +154,7 @@ int main(int argc, char *argv[])
   if(MoveBlockPtr(fp, block_count_ptr) != 0) {
       fprintf(stderr, "Bitmap Data Block seek failed.\n");
   }
-  // 由于文件创建时以/dev/zero内容填充，故不再空白填充
+  // 由于文件创建时以/dev/zero内容填充，故不再空白填充(注意：这表明重置文件系统的正确方法是删除Img文件并运行创建脚本重新创建)
   block_count_ptr += dataBitmap_count;
 
   // inode块: 需要 4K 个inode，每个inode 64字节，共需 4K*64/512 = 512 块 
@@ -162,6 +172,8 @@ int main(int argc, char *argv[])
   if(MoveBlockPtr(fp, block_count_ptr) != 0) {
       fprintf(stderr, "Data Block seek failed.\n");
   }
+
+  // 初始化第一个dataBlock
   InitFirstDEntry(fp);
   
   fclose(fp);

@@ -95,6 +95,7 @@ short HelpGenFileObjHeadChecksum(struct fileObj* ptrFileObj) /*函数只生成�
 
 void HelpGetFileNameFromInodeNum(int inodeNum, char* pFileName)
 {
+	printf("HelpGetFileNameFromInodeNum is called.\t inodeNum:%d\n", inodeNum);
 	FILE* fp = fopen(imgPath, "r");
 	if(fp == NULL) {
 		perror("OpenFile failed.\n");
@@ -105,14 +106,18 @@ void HelpGetFileNameFromInodeNum(int inodeNum, char* pFileName)
 	struct inode* ptrInode = malloc(sizeof(struct inode));
 	fread(ptrInode, sizeof(struct inode), 1, fp);
 
+	printf("Reading DataBlock: %d\n", ptrInode->addr[0]);
+
 	// 读出 data
 	struct fileObj* ptrFileObj = malloc(sizeof(struct fileObj));
 	fseek(fp, getDataOffsetByNum(ptrInode->addr[0]), SEEK_SET);
 	fread(ptrFileObj, sizeof(struct fileObj), 1, fp);
 	if(HelpGenFileObjHeadChecksum(ptrFileObj) == ptrFileObj->checksum) { // 普通文件
+		printf("Block head: Common file.\tfilename: %s\n",ptrFileObj->fileName);
 		HelpConcatFileName(ptrFileObj->fileName, ptrFileObj->postFix, pFileName);
 		free(ptrFileObj);
 	} else { // 目录
+		printf("Block head: Entry.\n");
 		fseek(fp, getDataOffsetByNum(ptrInode->addr[0]), SEEK_SET);
 		struct dentry* ptrEntry = malloc(sizeof(struct dentry));
 		fread(ptrEntry, sizeof(struct dentry), 1, fp);
@@ -127,6 +132,7 @@ void HelpGetFileNameFromInodeNum(int inodeNum, char* pFileName)
 
 void HelpConcatFileName(char* fileName, char* postFix, char* concat)
 {
+	printf("HelpConcatFileName is called.\tfilename: %s\t postFix: %s\n", fileName, postFix);
 	concat[0]='\0';
 	strcpy(concat, fileName);
 	if(strcmp(postFix, "") == 0) {
@@ -139,7 +145,7 @@ void HelpConcatFileName(char* fileName, char* postFix, char* concat)
 int HelpFindFile(const char* fileName, short int startInodeNum, int goDeep/*是否继续下一层*/) 
 /*辅助查找文件，返回文件的inode号,判断成功条件：startInodeNum == 返回值*/
 {
-	printf("HelpFindFile is called\t fileName: %s\n", fileName);
+	printf("HelpFindFile is called\t fileName: %s startInodeNum: %d\n", fileName, startInodeNum);
 	int inodeOff = getInodeOffsetByNum(startInodeNum);
 	FILE* fp = fopen(imgPath, "r");
 	if(fp == NULL) {
@@ -303,12 +309,13 @@ static int SFS_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	(void) offset;
 	(void) fi;
 	(void) flags;
-
+	printf("SFS_readdir is called.\tpath: %s\n", path);
 	// 查找目录的Inode
 	int startInodeNum = 1;
-	for(char *pNext = path; IsReachPathEnd(pNext);) {
+	for(char *pNext = path; !IsReachPathEnd(pNext);) {
 		startInodeNum = HelpWalkPath(pNext, startInodeNum, &pNext);
 		if(startInodeNum == -ENOENT) {
+			fprintf(stderr, "Inode: %d Not Found\n", startInodeNum);
 			return startInodeNum; // 找不到
 		}
 	}
@@ -323,23 +330,32 @@ static int SFS_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	fread(ptrInode, sizeof(struct inode), 1, fp);
 	if(ptrInode->st_ino < 1) {
 		// 非法 Inode 号，失败
+		fprintf(stderr, "Invalid InodeNum: %d to read.\n", ptrInode->st_ino);
 		free(ptrInode);
 		fclose(fp);
 		return -ENOENT;
 	}
+
+	printf("Reading DataBlock: %d\n", ptrInode->addr[0]);
 	int dataOff = getDataOffsetByNum(ptrInode->addr[0]);
 	struct dentry* ptrEntry = malloc(sizeof(struct dentry));
 	fseek(fp, dataOff, SEEK_SET);
 	fread(ptrEntry, sizeof(struct dentry), 1 ,fp);
 
+	printf("Reading entry: %s\n", ptrEntry->fileName);
+
 	char fileName[256];
 	memset(fileName, 0, sizeof(fileName));
+
+	printf("Child Inode Num: ");
 	for(int i = 0; i < max_child_count; i++) {
+		printf(" %d ",ptrEntry->childInodeNo[i]);
 		if(ptrEntry->childInodeNo[i] > 0) {
 			HelpGetFileNameFromInodeNum(ptrEntry->childInodeNo[i], fileName);
 			filler(buf, fileName, NULL, 0, 0);
 		}
 	}
+	printf("\n");
 
 
 	// if (strcmp(path, "/") != 0)
@@ -357,12 +373,13 @@ static int SFS_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 static int SFS_open(const char *path, struct fuse_file_info *fi)
 {
+	// 此函数主要用于检查权限等问题，为了简单，直接返回0忽略此步
 	printf("SFS_open is called.\tpath: %s\n", path);
-	if (strcmp(path+1, options.filename) != 0)
-		return -ENOENT;
+	// if (strcmp(path+1, options.filename) != 0)
+	// 	return -ENOENT;
 
-	if ((fi->flags & O_ACCMODE) != O_RDONLY)
-		return -EACCES;
+	// if ((fi->flags & O_ACCMODE) != O_RDONLY)
+	// 	return -EACCES;
 
 	return 0;
 }
@@ -390,6 +407,168 @@ static int SFS_read(const char *path, char *buf, size_t size, off_t offset,
 int SFS_mkdir(const char *path, mode_t mode)
 {
 	printf("Mkdir path: %s\n", path);
+	
+	// 分割pwd与需要新建的目录路径, *p 指向需要新建的目录名字
+	char *p = strrchr(path, '/');
+	*p = '\0'; // 截断
+	p += 1;
+
+	// 恢复父目录开头的"/"符号
+	char *parentPath = malloc((strlen(path) + 1) * sizeof(char));
+	strcpy(parentPath,"/");
+	strcat(parentPath, path);
+
+
+	printf("Mkdir Parent path: %s\n", parentPath);
+	printf("Mkdir Child path: %s\n", p);
+
+	// 下行代码参考Linux内核源码风格，既无需定义新变量，也具有扩展性
+	if(strlen(p) > sizeof( ((struct dentry*)0)->fileName ) ) {
+		perror("Length of filename overflow.\n");
+		return -ENAMETOOLONG;
+	}
+
+	// 由于需要实现多级目录，故不要求在根目录下运行此命令
+	// 读取pwd的inode
+	int startInodeNum = 1;
+	for(char* pNext = parentPath; !IsReachPathEnd(pNext);) {
+		startInodeNum = HelpWalkPath(pNext, startInodeNum, &pNext);
+		if(startInodeNum == -ENOENT) {
+			perror("Pwd Error.\n");
+			free(parentPath);
+			return -ENOENT;
+		}
+	}
+	free(parentPath);
+
+	int iNodeOffset = getInodeOffsetByNum(startInodeNum);
+	FILE* fp = fopen(imgPath, "r+"); // rw模式
+	if(fp == NULL) {
+		perror("Open ImgDisk failed.\n");
+		return -ENOENT;
+	}
+	fseek(fp, iNodeOffset, SEEK_SET);
+	struct inode* ptrInode = malloc(sizeof(struct inode));
+	fread(ptrInode, sizeof(struct inode), 1, fp);
+
+	fseek(fp, getDataOffsetByNum(ptrInode->addr[0]), SEEK_SET);
+	struct dentry* ptrEntry = malloc(sizeof(struct dentry));
+	fread(ptrEntry, sizeof(struct dentry), 1, fp);
+
+	// 判断目录是否已存在
+	char tempFilename[256];
+	memset(tempFilename, '\0', sizeof(tempFilename));
+	for(int i=0; i < max_child_count; i++) {
+		if(ptrEntry->childInodeNo[i] != 0) {
+			HelpGetFileNameFromInodeNum(ptrEntry->childInodeNo[i], tempFilename);
+			if(strcmp(tempFilename, p) == 0) { // 目录已存在
+				perror("Directory existed.\n");
+				return -EEXIST;
+			}
+		}
+	}
+	
+	int available = -1; // 标记可用子目录标号
+	for(int i = 0; i < max_child_count; i++) {
+		if(ptrEntry->childInodeNo[i] < 1) {
+			available = i;
+			break;
+		}
+	}
+	if(available == -1) { // 超过当前目录最大目录数量
+		perror("Number of directories overflow.\n");
+		return -ENOENT;
+	}
+	
+	// 读取 inode 位图 与 数据位图
+	struct bitmap_inode* ptrBi = malloc(sizeof(struct bitmap_inode));
+	struct bitmap_dblock* ptrBd = malloc(sizeof(struct bitmap_dblock));
+
+	fseek(fp, getInodeBitmapOffset(), SEEK_SET);
+	fread(ptrBi, sizeof(struct bitmap_inode),1, fp);
+	fseek(fp, getDataBitmapOffset(), SEEK_SET);
+	fread(ptrBd, sizeof(struct bitmap_dblock), 1, fp);
+
+	// 暴力算法：获取可用inode号与可用数据区号
+	int avail_InodeNo = 0;
+	int avail_dataBlockNo = 0;
+	for(int i = 1; i <= inode_count; i++) {
+		if(getBitmapValue(ptrBi, i) == 0) {
+			avail_InodeNo = i;
+			break;
+		}
+	}
+	for(int i = 1; i <= dataBlock_count; i++) {
+		if(getBitmapValue(ptrBd, i) == 0) {
+			avail_dataBlockNo = i;
+			break;
+		}
+	}
+	if(avail_InodeNo == 0 || avail_dataBlockNo == 0) {
+		perror("No available Block.\n");
+		free(ptrBi);
+		free(ptrBd);
+		free(ptrInode);
+		free(ptrEntry);
+		fclose(fp);
+		return -ENOENT;
+	}
+
+	printf("Available num:\tInode: %d\t DataBlock: %d\n", avail_InodeNo, avail_dataBlockNo);
+
+	// 写入inode与dentry
+	struct inode* ptrNewInode = malloc(sizeof(struct inode));
+	struct dentry* ptrNewEntry = malloc(sizeof(struct dentry));
+	
+	strcpy(ptrNewEntry->fileName, p);
+	strcpy(ptrNewEntry->postFix, "");
+	ptrNewEntry->inodeNo = avail_InodeNo;
+	for(int i =0; i < max_child_count; i++) {
+		ptrNewEntry->childInodeNo[i] = 0;
+	}
+	
+	// ptrNewInode->st_atim;
+	ptrNewInode->addr[0] = avail_dataBlockNo;
+	timespec_get(&ptrNewInode->st_atim, TIME_UTC);
+	ptrNewInode->st_mode = mode | S_IFDIR;
+
+	// 继承父目录属性
+	ptrNewInode->st_gid = ptrInode->st_gid;
+	ptrNewInode->st_uid = ptrInode->st_uid;
+	ptrNewInode->st_ino = avail_InodeNo;
+	ptrNewInode->st_nlink = 1;
+	ptrNewInode->st_size = sizeof(struct dentry);
+
+	fseek(fp, getInodeOffsetByNum(ptrNewInode->st_ino), SEEK_SET);
+	fwrite(ptrNewInode, sizeof(struct inode), 1, fp);
+
+	fseek(fp, getDataOffsetByNum(ptrNewInode->addr[0]), SEEK_SET);
+	fwrite(ptrNewEntry, sizeof(struct dentry), 1, fp);
+
+
+	// 修改父目录
+	ptrEntry->childInodeNo[available] = ptrNewInode->st_ino;
+	fseek(fp, getDataOffsetByNum(ptrInode->addr[0]), SEEK_SET);
+	fwrite(ptrEntry, sizeof(struct dentry), 1, fp);
+
+	// 修改位图
+	setBitmapValue(ptrBi, avail_InodeNo, 1);
+	setBitmapValue(ptrBd, avail_dataBlockNo, 1);
+	
+	fseek(fp, getInodeBitmapOffset(), SEEK_SET);
+	fwrite(ptrBi, sizeof(struct bitmap_inode), 1, fp);
+
+	fseek(fp, getDataBitmapOffset(), SEEK_SET);
+	fwrite(ptrBd, sizeof(struct bitmap_dblock), 1, fp);
+
+	// 释放资源
+	free(ptrNewInode);
+	free(ptrNewEntry);
+	free(ptrBi);
+	free(ptrBd);
+	free(ptrInode);
+	free(ptrEntry);
+	fclose(fp);
 	return 0;
 }
 

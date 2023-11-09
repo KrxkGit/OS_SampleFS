@@ -72,7 +72,7 @@ struct bitmap_dblock {
     char available[2048]; // 8 * 1024* 1024 / 512 / 8 = 2048
 };
 // 文件系统状态量区
-short int pwdInodeNo; // 标记当前目录的inode号
+short int pwdInodeNo; // 标记当前目录的inode号,目前保留
 
 
 // 辅助函数： 返回区域头部距离文件系统头部的偏移量：单位（字节）.采用 inline 提高效率减少递归并保持扩展性
@@ -94,12 +94,12 @@ inline int getInodeOffset()
 }
 inline int getDataOffset()
 {
-    return getInodeBitmapOffset() + inode_count * fs_bl_size;
+    return getInodeOffset() + inode_count * fs_bl_size;
 }
 // 二层封装
 inline int getDataOffsetByNum(int nBlock/*数据块编号*/)
 {
-    return getDataOffset() + nBlock * fs_bl_size;
+    return getDataOffset() + (nBlock - 1) * fs_bl_size;
 }
 inline int getInodeOffsetByNum(int iNodeNo/*inode编号*/)
 {
