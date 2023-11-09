@@ -162,6 +162,7 @@ int HelpFindFile(const char* fileName, short int startInodeNum, int goDeep/*是�
 	char concat[256];
 
 	if(ptrfileObj->checksum == HelpGenFileObjHeadChecksum(ptrfileObj)) { // 符合文件校验，为文件
+		printf("HelpFindFile:\tFind Common File\n");
 		fclose(fp);
 		HelpConcatFileName(ptrfileObj->fileName, ptrfileObj->postFix, concat);
 		if(strcmp(concat, fileName) == 0) { // 找到了
@@ -183,6 +184,7 @@ int HelpFindFile(const char* fileName, short int startInodeNum, int goDeep/*是�
 				return -ENOENT;
 			}
 			for(int i=0 ;i < max_child_count;i++) {
+				printf("HelpFindFile recursion\n");
 				if(HelpFindFile(fileName, ptrEntry->childInodeNo[i], 0)==ptrEntry->childInodeNo[i]) {
 					// 成功找到
 					return ptrEntry->childInodeNo[i];
@@ -198,18 +200,23 @@ void HelpSplitFileName(const char* customPath, const char* outSplitFileName)
 	char* p = customPath;
 	char* end = strchr(p, '/');
 	if(end == NULL) {
-		end = &customPath[strlen(customPath) - 1] + 1;
+		end = &customPath[strlen(customPath) - 1] + 2;
+		*end = '\0';
 	}
 	strncpy(outSplitFileName, p, end-p);
+	printf("HelpSplitFileName:\tSplitFileName: %s\n", outSplitFileName);
 }
 
 int IsReachPathEnd(char* pNext)
 {
 	/*检查路径是否结束*/
-	char* p = pNext - 1;
-	if(*p == '\0') {
+	printf("IsReachPathEnd\tpNext:%s\n", pNext);
+	char* p = pNext;
+	if(strlen(p) == 0) {
+		printf("IsReachPathEnd\tReach End\n");
 		return 1;
 	} else {
+		printf("IsReachPathEnd\tContinue\n");
 		return 0;
 	}
 }
@@ -218,9 +225,12 @@ int HelpWalkPath(const char *customPath, short int startInodeNum/*遍历的起�
 /*辅助遍历目录，返回匹配文件的inode号，可通过检查 *(pNext-1) 是否为'\0' 检查是否遍历完成.
 注意： 这表明 路径的末尾不应该加"/"，否则将引起报错 "*/
 {
+	printf("HelpWalkPath\t customPath: %s\n", customPath);
 	char* splitFilename = malloc(strlen(customPath));
 	memset(splitFilename, '\0', sizeof(char) * strlen(customPath));
 	HelpSplitFileName(customPath, splitFilename);
+	// printf("HelpWalkPath\t splitFileName: %s\n", splitFilename);
+
 	if(strcmp(splitFilename, "") == 0) { // 根目录
 		free(splitFilename);
 		*pNext = customPath + 1;
@@ -251,7 +261,7 @@ static int SFS_getattr(const char *path, struct stat *stbuf,
 
 	// 按路径查找，直到路径末尾
 	int startInodeNum = 1;
-	for(char* pNext = path; IsReachPathEnd(pNext);) {
+	for(char* pNext = path; !IsReachPathEnd(pNext);) {
 		startInodeNum =  HelpWalkPath(pNext, startInodeNum, &pNext);
 		if(startInodeNum == -ENONET) {
 			// 找不到
@@ -319,6 +329,8 @@ static int SFS_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	}
 	int dataOff = getDataOffsetByNum(ptrInode->addr[0]);
 	struct dentry* ptrEntry = malloc(sizeof(struct dentry));
+	fseek(fp, dataOff, SEEK_SET);
+	fread(ptrEntry, sizeof(struct dentry), 1 ,fp);
 
 	char fileName[256];
 	memset(fileName, 0, sizeof(fileName));
@@ -345,6 +357,7 @@ static int SFS_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 
 static int SFS_open(const char *path, struct fuse_file_info *fi)
 {
+	printf("SFS_open is called.\tpath: %s\n", path);
 	if (strcmp(path+1, options.filename) != 0)
 		return -ENOENT;
 
@@ -357,6 +370,7 @@ static int SFS_open(const char *path, struct fuse_file_info *fi)
 static int SFS_read(const char *path, char *buf, size_t size, off_t offset,
 		      struct fuse_file_info *fi)
 {
+	printf("SFS_Read is called.\tpath: %s\n", path);
 	size_t len;
 	(void) fi;
 	if(strcmp(path+1, options.filename) != 0)
@@ -373,30 +387,34 @@ static int SFS_read(const char *path, char *buf, size_t size, off_t offset,
 	return size;
 }
 
-int SFS_mkdir(struct fuse_fs *fs, const char *path, mode_t mode)
+int SFS_mkdir(const char *path, mode_t mode)
 {
-
+	printf("Mkdir path: %s\n", path);
+	return 0;
 }
 
-int SFS_rmdir(struct fuse_fs *fs, const char *path)
+int SFS_rmdir(const char *path)
 {
-
+	printf("Rmdir path: %s\n", path);
+	return 0;
 }
 
-int SFS_mknod(struct fuse_fs *fs, const char *path, mode_t mode,dev_t rdev)
+int SFS_mknod(const char *path, mode_t mode,dev_t rdev)
 {
-
+	printf("Mknod path: %s\n", path);
+	return 0;
 }
 
-int SFS_write(struct fuse_fs *fs, const char *path, const char *buf,
-		  size_t size, off_t off, struct fuse_file_info *fi)
+int SFS_write(const char *path, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
  {
-
+	printf("Write path: %s\n", path);
+	return 0;
  }
 
-int SFS_unlink(struct fuse_fs *fs, const char *path)
+int SFS_unlink(const char *path)
 {
-
+	printf("Unlink path: %s\n", path);
+	return 0;
 }
 
 static const struct fuse_operations hello_oper = {
