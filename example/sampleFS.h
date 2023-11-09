@@ -33,7 +33,7 @@ struct inode {
     gid_t st_gid; /* 拥有者的组 ID，4字节  */ 
     off_t st_size; /*文件大小，4字节 */ 
     struct timespec st_atim; /* 16个字节time of last access */ 
-    short int addr [7];    /*磁盘地址，14字节。addr[0]-addr[3]是直接地址，addr[4]是一次间接，addr[5]是二次间接，addr[6]是三次间接。
+    short int addr [7];    /*磁盘块地址，14字节。addr[0]-addr[3]是直接地址，addr[4]是一次间接，addr[5]是二次间接，addr[6]是三次间接。
     为了方便，此处使用相对地址，即相对数据区头部的偏移！由于文件对应的数据块不一定是连续的，所以每个指针指向一个块地址。**/
     char __reserve[17]; // 填充为 64 字节 
 };

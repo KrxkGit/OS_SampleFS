@@ -93,6 +93,38 @@ short HelpGenFileObjHeadChecksum(struct fileObj* ptrFileObj) /*函数只生成�
 	return checksum;
 }
 
+void HelpGetFileNameFromInodeNum(int inodeNum, char* pFileName)
+{
+	FILE* fp = fopen(imgPath, "r");
+	if(fp == NULL) {
+		perror("OpenFile failed.\n");
+		return;
+	}
+	// 读出Inode
+	fseek(fp, getInodeOffsetByNum(inodeNum), SEEK_SET);
+	struct inode* ptrInode = malloc(sizeof(struct inode));
+	fread(ptrInode, sizeof(struct inode), 1, fp);
+
+	// 读出 data
+	struct fileObj* ptrFileObj = malloc(sizeof(struct fileObj));
+	fseek(fp, getDataOffsetByNum(ptrInode->addr[0]), SEEK_SET);
+	fread(ptrFileObj, sizeof(struct fileObj), 1, fp);
+	if(HelpGenFileObjHeadChecksum(ptrFileObj) == ptrFileObj->checksum) { // 普通文件
+		HelpConcatFileName(ptrFileObj->fileName, ptrFileObj->postFix, pFileName);
+		free(ptrFileObj);
+	} else { // 目录
+		fseek(fp, getDataOffsetByNum(ptrInode->addr[0]), SEEK_SET);
+		struct dentry* ptrEntry = malloc(sizeof(struct dentry));
+		fread(ptrEntry, sizeof(struct dentry), 1, fp);
+		HelpConcatFileName(ptrEntry->fileName, ptrEntry->postFix, pFileName);
+		free(ptrEntry);
+	}
+
+	free(ptrInode);
+	fclose(fp);
+
+}
+
 void HelpConcatFileName(char* fileName, char* postFix, char* concat)
 {
 	concat[0]='\0';
@@ -187,6 +219,7 @@ int HelpWalkPath(const char *customPath, short int startInodeNum/*遍历的起�
 注意： 这表明 路径的末尾不应该加"/"，否则将引起报错 "*/
 {
 	char* splitFilename = malloc(strlen(customPath));
+	memset(splitFilename, '\0', sizeof(char) * strlen(customPath));
 	HelpSplitFileName(customPath, splitFilename);
 	if(strcmp(splitFilename, "") == 0) { // 根目录
 		free(splitFilename);
@@ -216,6 +249,7 @@ static int SFS_getattr(const char *path, struct stat *stbuf,
 	}
 	struct inode* ptrInode = malloc(sizeof(struct inode));
 
+	// 按路径查找，直到路径末尾
 	int startInodeNum = 1;
 	for(char* pNext = path; IsReachPathEnd(pNext);) {
 		startInodeNum =  HelpWalkPath(pNext, startInodeNum, &pNext);
@@ -260,13 +294,52 @@ static int SFS_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	(void) fi;
 	(void) flags;
 
-	if (strcmp(path, "/") != 0)
+	// 查找目录的Inode
+	int startInodeNum = 1;
+	for(char *pNext = path; IsReachPathEnd(pNext);) {
+		startInodeNum = HelpWalkPath(pNext, startInodeNum, &pNext);
+		if(startInodeNum == -ENOENT) {
+			return startInodeNum; // 找不到
+		}
+	}
+	int inodeOff = getInodeOffsetByNum(startInodeNum);
+	FILE* fp = fopen(imgPath,"r");
+	if(fp == NULL) {
+		perror("readdir failed:\t Open img failed.");
 		return -ENOENT;
+	}
+	fseek(fp, inodeOff, SEEK_SET);
+	struct inode* ptrInode = malloc(sizeof(struct inode));
+	fread(ptrInode, sizeof(struct inode), 1, fp);
+	if(ptrInode->st_ino < 1) {
+		// 非法 Inode 号，失败
+		free(ptrInode);
+		fclose(fp);
+		return -ENOENT;
+	}
+	int dataOff = getDataOffsetByNum(ptrInode->addr[0]);
+	struct dentry* ptrEntry = malloc(sizeof(struct dentry));
+
+	char fileName[256];
+	memset(fileName, 0, sizeof(fileName));
+	for(int i = 0; i < max_child_count; i++) {
+		if(ptrEntry->childInodeNo[i] > 0) {
+			HelpGetFileNameFromInodeNum(ptrEntry->childInodeNo[i], fileName);
+			filler(buf, fileName, NULL, 0, 0);
+		}
+	}
+
+
+	// if (strcmp(path, "/") != 0)
+	// 	return -ENOENT;
 
 	filler(buf, ".", NULL, 0, 0);
 	filler(buf, "..", NULL, 0, 0);
-	filler(buf, options.filename, NULL, 0, 0);
+	// filler(buf, options.filename, NULL, 0, 0);
 
+	free(ptrInode);
+	free(ptrEntry);
+	fclose(fp);
 	return 0;
 }
 
