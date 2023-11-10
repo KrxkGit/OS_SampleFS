@@ -40,15 +40,15 @@ struct inode {
 
 struct dentry // 由于目录本质上也是一种文件，故文件也采用此结构体
 {
-    char fileName[8]; // 文件名
-    char postFix[3]; // 扩展名
+    char fileName[9]; // 文件名(预留一个终止符位置)
+    char postFix[4]; // 扩展名
     short int inodeNo; // inode 号，实际使用12位
     short int childInodeNo[max_child_count]; // 子文件iNode 号
 };
 
 struct fileObj { // 文件头部
-    char fileName[8]; // 文件名
-    char postFix[3]; // 扩展名
+    char fileName[9]; // 文件名
+    char postFix[4]; // 扩展名
     short checksum; // 根据文件头部信息生成的校验和，用于区分是否为一个文件或目录
 };
 
