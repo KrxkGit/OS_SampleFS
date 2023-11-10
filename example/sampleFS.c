@@ -172,8 +172,13 @@ int HelpFindFile(const char* fileName, short int startInodeNum, int goDeep/*是�
 		fclose(fp);
 		HelpConcatFileName(ptrfileObj->fileName, ptrfileObj->postFix, concat);
 		if(strcmp(concat, fileName) == 0) { // 找到了
-			return ptrInode->st_ino;
+			free(ptrfileObj);
+			int temp = ptrInode->st_ino;
+			free(ptrInode);
+			return temp;
 		} else {
+			free(ptrfileObj);
+			free(ptrInode);
 			return -ENOENT;
 		}
 	} else { // startInodeNum 为目录,查找目录下一层深度下的所有文件
@@ -183,20 +188,29 @@ int HelpFindFile(const char* fileName, short int startInodeNum, int goDeep/*是�
 		HelpConcatFileName(ptrEntry->fileName, ptrEntry->postFix, concat);
 		fclose(fp);
 
+		printf("HelpFindFile:\tDirctory: concat:%s\tfileName: %s\n", concat, fileName);
 		if(strcmp(concat, fileName) == 0) { // 找到了
-			return ptrInode->st_ino;
+			int temp = ptrInode->st_ino;
+			free(ptrInode);
+			return temp;
 		} else {
+			free(ptrInode);
 			if(goDeep == 0) {
+				free(ptrEntry);
 				return -ENOENT;
 			}
-			for(int i=0 ;i < max_child_count;i++) {
-				printf("HelpFindFile recursion\n");
-				if(HelpFindFile(fileName, ptrEntry->childInodeNo[i], 0)==ptrEntry->childInodeNo[i]) {
+			for(int i=0 ;i < max_child_count; i++) {
+				printf("HelpFindFile recursion\t Child: %d\n", i);
+				if(HelpFindFile(fileName, ptrEntry->childInodeNo[i], 0) == ptrEntry->childInodeNo[i]) {
 					// 成功找到
-					return ptrEntry->childInodeNo[i];
+					printf("Success to find:\tfilename: %s\t childInodeNo: %d\n", fileName, ptrEntry->childInodeNo[i]);
+					int temp = ptrEntry->childInodeNo[i];
+					free(ptrEntry);
+					return temp;
 				}
-				return -ENOENT;
 			}
+			free(ptrEntry);
+			return -ENOENT;
 		}
 	}
 }
@@ -404,6 +418,7 @@ static int SFS_read(const char *path, char *buf, size_t size, off_t offset,
 	return size;
 }
 
+/*注意：为了简化实现，不支持存在与直接父目录同名的子目录。若实在有必要，可考虑建立中间过渡目录*/
 int SFS_mkdir(const char *path, mode_t mode)
 {
 	printf("Mkdir path: %s\n", path);
@@ -455,6 +470,7 @@ int SFS_mkdir(const char *path, mode_t mode)
 	struct dentry* ptrEntry = malloc(sizeof(struct dentry));
 	fread(ptrEntry, sizeof(struct dentry), 1, fp);
 
+	printf("mkdir pwd: %s\n", ptrEntry->fileName);
 	// 判断目录是否已存在
 	char tempFilename[256];
 	memset(tempFilename, '\0', sizeof(tempFilename));
@@ -471,6 +487,7 @@ int SFS_mkdir(const char *path, mode_t mode)
 	int available = -1; // 标记可用子目录标号
 	for(int i = 0; i < max_child_count; i++) {
 		if(ptrEntry->childInodeNo[i] < 1) {
+			printf("Available Child position: %d\n", i);
 			available = i;
 			break;
 		}
@@ -575,6 +592,127 @@ int SFS_mkdir(const char *path, mode_t mode)
 int SFS_rmdir(const char *path)
 {
 	printf("Rmdir path: %s\n", path);
+	int startInodeNum = 1;
+	for(char* pNext = path; !IsReachPathEnd(pNext);) {
+		startInodeNum = HelpWalkPath(pNext, startInodeNum, &pNext);
+		if(startInodeNum == -ENOENT) {
+			return -ENOENT;
+		}
+	}
+	FILE* fp = fopen(imgPath, "r+");
+	if(fp == NULL) {
+		perror("Cannot open ImgFile");
+		return -ENOENT;
+	}
+	
+	// 读取目录Inode
+	struct inode* ptrInode = malloc(sizeof(struct inode));
+	fseek(fp, getInodeOffsetByNum(startInodeNum), SEEK_SET);
+	fread(ptrInode, sizeof(struct inode), 1, fp);
+
+	if(ptrInode->addr[0] < 1) { // 非法磁盘地址
+		return -ENOENT;
+	}
+
+	// 判断Inode指向的是否为目录
+	struct fileObj* ptrfileObj = malloc(sizeof(struct fileObj));
+	fseek(fp, getDataOffsetByNum(ptrInode->addr[0]),SEEK_SET);
+	fread(ptrfileObj, sizeof(struct fileObj), 1, fp);
+
+	if(ptrfileObj->checksum == HelpGenFileObjHeadChecksum(ptrfileObj)) {
+		// 普通文件非目录
+		free(ptrfileObj);
+		free(ptrInode);
+		fclose(fp);
+		return -ENOTDIR;
+	}
+
+	struct dentry* ptrEntry = malloc(sizeof(struct dentry));
+	fseek(fp, getDataOffsetByNum(ptrInode->addr[0]),SEEK_SET);
+	fread(ptrEntry, sizeof(struct dentry), 1, fp);
+
+	// 检查是否目录是否为空
+	for(int i = 0; i < max_child_count; i++) {
+		if(ptrEntry->childInodeNo[i] > 0) {
+			free(ptrfileObj);
+			free(ptrInode);
+			free(ptrEntry);
+			fclose(fp);
+			return -ENOTEMPTY;
+		}
+	}
+
+	// 删除目录： 由于目录仅占用一个块，删除一个空目录比较简单
+	// 标记位图为0
+	struct bitmap_inode* ptrBi = malloc(sizeof(struct bitmap_inode));
+	struct bitmap_dblock* ptrDb = malloc(sizeof(struct bitmap_dblock));
+
+	fseek(fp, getInodeBitmapOffset(), SEEK_SET);
+	fread(ptrBi, sizeof(struct bitmap_inode), 1, fp);
+
+	fseek(fp, getDataBitmapOffset(), SEEK_SET);
+	fread(ptrDb, sizeof(struct bitmap_dblock), 1, fp);
+
+	setBitmapValue(ptrBi, ptrInode->st_ino, 0);
+	setBitmapValue(ptrDb, ptrInode->addr[0], 0);
+	
+	fseek(fp, getInodeBitmapOffset(), SEEK_SET);
+	fwrite(ptrBi, sizeof(struct bitmap_inode), 1, fp);
+
+	fseek(fp, getDataBitmapOffset(), SEEK_SET);
+	fwrite(ptrDb, sizeof(struct bitmap_dblock), 1, fp);
+
+	free(ptrBi);
+	free(ptrDb);
+
+	// 删除Inode节点，由于空目录数据较小，也一并置零清除
+	fseek(fp, getDataOffsetByNum(ptrInode->addr[0]), SEEK_SET);
+	memset(ptrEntry, 0, sizeof(struct dentry));
+	fwrite(ptrEntry, sizeof(ptrEntry), 1, fp);
+
+	fseek(fp, getInodeOffsetByNum(ptrInode->st_ino), SEEK_SET);
+	memset(ptrInode, 0, sizeof(struct inode));
+	fwrite(ptrInode, sizeof(struct inode), 1, fp);
+
+	// 修改父目录的信息
+	char* p = malloc(sizeof(char) * strlen(path));
+	char* pSave = p; // 保存p，用于释放内存
+	memset(p, '\0', sizeof(char) * strlen(path));
+	strcpy(p, path);
+	char* t = strrchr(p, '/');
+	*t = '\0'; // 此时p为父目录路径
+	// 处理根目录情况
+	if(strcmp(p, "") == 0) {
+		strcat(p, "/");
+	}
+	int start = 1;
+	for(;!IsReachPathEnd(p);) {
+		start = HelpWalkPath(p, start, &p);
+		if(start == -ENOENT) {
+			// 此情况理论上不存在
+			perror("Parent directory not found.\n");
+			return -ENOENT;
+		}
+	}
+	fseek(fp, getInodeOffsetByNum(start), SEEK_SET);
+	fread(ptrInode, sizeof(struct inode), 1, fp);
+	fseek(fp, getDataOffsetByNum(ptrInode->addr[0]), SEEK_SET);
+	fread(ptrEntry, sizeof(struct dentry), 1, fp);
+	for(int i = 0; i < max_child_count; i++) {
+		if(ptrEntry->childInodeNo[i] == startInodeNum) {
+			ptrEntry->childInodeNo[i] = 0;
+			// break; // 若存在多个链接情况，多个子目录对应同一inode 情况可能存在，不应break
+		}
+	}
+	fseek(fp, getDataOffsetByNum(ptrInode->addr[0]), SEEK_SET);
+	fwrite(ptrEntry, sizeof(struct dentry), 1, fp);
+
+	// 清理
+	free(pSave);
+	free(ptrfileObj);
+	free(ptrEntry);
+	free(ptrInode);
+	fclose(fp);
 	return 0;
 }
 

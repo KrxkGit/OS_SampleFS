@@ -107,6 +107,7 @@ inline int getInodeOffsetByNum(int iNodeNo/*inode编号*/)
 }
 
 // 辅助函数： 读取,设置第 n 个bit的标志。为了简化，不进行越界检查。
+// 由于 char* 位于位图结构体的头部，所以根据 C语言规则， 可直接向下列函数传递结构体指针
 // 注意： 从 1 开始编号，否则将越界
 int getBitmapValue(char* bytes,int bit) // 输入字节数组，获得指定节点的值
 {
