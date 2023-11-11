@@ -55,7 +55,7 @@ void InitFirstInode(FILE *fp)
   int savePtr = ftell(fp); // 保存原来指针位置，初始化函数不应该改写闭包外环境
 
   struct inode* node = malloc(sizeof(struct inode));
-  node->st_mode = S_IFDIR | 0755; /* 权限，2字节 */ 
+  node->st_mode = __S_IFDIR | 0755; /* 权限，2字节。此处定义为 755的目录 */ 
   node->st_ino = 1; /* i-node号，2字节 */ 
   node->st_nlink = 1; /* 连接数，1字节 */ 
   node->st_uid = getuid(); /* 拥有者的用户 ID ，4字节 */ 

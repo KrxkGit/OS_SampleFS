@@ -133,7 +133,7 @@ void HelpGetFileNameFromInodeNum(int inodeNum, char* pFileName)
 
 void HelpConcatFileName(char* fileName, char* postFix, char* concat)
 {
-	printf("HelpConcatFileName is called.\tfilename: %s\t postFix: %s\n", fileName, postFix);
+	// printf("HelpConcatFileName is called.\tfilename: %s\t postFix: %s\n", fileName, postFix);
 	concat[0]='\0';
 	strcpy(concat, fileName);
 	if(strcmp(postFix, "") == 0) {
@@ -146,7 +146,7 @@ void HelpConcatFileName(char* fileName, char* postFix, char* concat)
 int HelpFindFile(const char* fileName, short int startInodeNum, int goDeep/*是否继续下一层*/) 
 /*辅助查找文件，返回文件的inode号,判断成功条件：startInodeNum == 返回值*/
 {
-	printf("HelpFindFile is called\t fileName: %s startInodeNum: %d\n", fileName, startInodeNum);
+	// printf("HelpFindFile is called\t fileName: %s startInodeNum: %d\n", fileName, startInodeNum);
 	int inodeOff = getInodeOffsetByNum(startInodeNum);
 	FILE* fp = fopen(imgPath, "r");
 	if(fp == NULL) {
@@ -227,7 +227,7 @@ void HelpSplitFileName(const char* customPath, const char* outSplitFileName)
 		*end = '\0';
 	}
 	strncpy(outSplitFileName, p, end-p);
-	printf("HelpSplitFileName:\tSplitFileName: %s\n", outSplitFileName);
+	// printf("HelpSplitFileName:\tSplitFileName: %s\n", outSplitFileName);
 }
 
 int IsReachPathEnd(char* pNext)
@@ -304,7 +304,8 @@ static int SFS_getattr(const char *path, struct stat *stbuf,
 	fclose(fp);
 
 	HelpFillStat(stbuf, ptrInode);
-	printf("stbuf->st_ino: %d\tstbuf->st_atime: %d\tstbuf->st_size: %d\n",stbuf->st_ino, stbuf->st_atime, stbuf->st_size);
+	printf("stbuf->st_ino: %d\tstbuf->st_atime: %d\tstbuf->st_size: %d\tnlink: %d\n",
+	stbuf->st_ino, stbuf->st_atime, stbuf->st_size, stbuf->st_nlink);
 	free(ptrInode);
 	// if (strcmp(path, "/") == 0) {
 	// 	fread(ptrInode, sizeof(struct inode), 1, fp);
@@ -423,7 +424,9 @@ static int SFS_read(const char *path, char *buf, size_t size, off_t offset,
 }
 
 /*注意：为了简化实现，不支持存在与直接父目录同名的子目录。若实在有必要，可考虑建立中间过渡目录。
-辅助函数： 支持多级目录下的文件夹创建，但不可递归创建*/
+辅助函数： 支持多级目录下的文件夹创建，但不可递归创建。
+另外，为了与Regular File区分，参照常见文件系统，不支持目录扩展名，"."后将视为filename而非postfix部分。
+但dentry结构保留了相关结构，有需要可进行扩展(利用代码中的HelpConcatFileName等接口可以很简单地实现)*/
 int SFS_mkdir(const char *path, mode_t mode)
 {
 	// 为了提高文件系统的便捷性，借鉴Shell的mkdir命令，此处设计为直接使用mkdir命令创建子目录。
@@ -553,7 +556,7 @@ int SFS_mkdir(const char *path, mode_t mode)
 	// ptrNewInode->st_atim;
 	ptrNewInode->addr[0] = avail_dataBlockNo;
 	timespec_get(&ptrNewInode->st_atim, TIME_UTC);
-	ptrNewInode->st_mode = mode | S_IFDIR;
+	ptrNewInode->st_mode = mode | __S_IFDIR; // __S_IFDIR 赋予目录属性
 
 	// 继承父目录属性
 	ptrNewInode->st_gid = ptrInode->st_gid;
@@ -722,9 +725,12 @@ int SFS_rmdir(const char *path)
 	return 0;
 }
 
+/*注意：由于 mknod 命令仅支持 字符设备、块设备、FIFO设备类型，故为了简化实现：
+外部应使用 "mknod filename c 0 0 "
+进行创建文件，这是因为fuse框架会对文件属性进行回调检测，否则将导致报错*/
 int SFS_mknod(const char *path, mode_t mode,dev_t rdev)
 {
-	printf("SFS_mknod is called.\tpath: %s\n", path);
+	printf("SFS_mknod is called.\tpath: %s\tdev: %d\n", path, rdev);
 	int count = 0;
 	for(char *temp = path; *temp!='\0'; temp++) {
 		if(*temp == '/') {
@@ -740,15 +746,12 @@ int SFS_mknod(const char *path, mode_t mode,dev_t rdev)
 	char* p = malloc(sizeof(char) * (strlen(path) + 1));
 	memset(p, '\0', (strlen(path)+ 1)* sizeof(char));
 	
-	//恢复开头的"/"
+	//恢复开头的"/"(此步似乎不需要，可考虑删除)
 	strcpy(p, "/");
 	strcat(p, path);
 	char* pos_split = strrchr(p, '/');
 	*pos_split = '\0';
 	char* child = pos_split + 1;
-
-
-
 
 	printf("parent: %s\t child: %s\n", p, child);
 
@@ -875,7 +878,7 @@ int SFS_mknod(const char *path, mode_t mode,dev_t rdev)
 	
 	ptrNewInode->addr[0] = avail_dataBlockNo;
 	timespec_get(&ptrNewInode->st_atim, TIME_UTC);
-	ptrNewInode->st_mode = mode | S_IFREG;
+	ptrNewInode->st_mode = mode | __S_IFCHR; // 赋予 __S_IFCHR 权限，以通过框架检测
 	ptrNewInode->st_ino = avail_InodeNo;
 
 	// 继承父目录属性
@@ -923,7 +926,7 @@ int SFS_mknod(const char *path, mode_t mode,dev_t rdev)
 int SFS_write(const char *path, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
  {
 	printf("Write path: %s\n", path);
-	return 0;
+	return 16;
  }
 
 int SFS_unlink(const char *path)
