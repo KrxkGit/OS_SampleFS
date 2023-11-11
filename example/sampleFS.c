@@ -816,7 +816,7 @@ int SFS_mknod(const char *path, mode_t mode,dev_t rdev)
 		free(ptrInode);
 		free(ptrEntry);
 		fclose(fp);
-		return -ENOENT;
+		return -EBADF; // fuse框架似乎不会对mknod命令检测该返回值，故无法提示用户超过最大子文件数量
 	}
 
 	// 读取 inode 位图 与 数据位图
@@ -926,12 +926,127 @@ int SFS_mknod(const char *path, mode_t mode,dev_t rdev)
 int SFS_write(const char *path, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
  {
 	printf("Write path: %s\n", path);
+	printf("Content in buf: %s\n", buf);
 	return 16;
  }
 
 int SFS_unlink(const char *path)
 {
 	printf("Unlink path: %s\n", path);
+	int pathLength = sizeof(char) * (strlen(path) + 1); // 保存目录长度
+	
+	int startInodeNum = 1;
+	for(char* pNext = path; !IsReachPathEnd(pNext);) {
+		startInodeNum = HelpWalkPath(pNext, startInodeNum, &pNext);
+		if(startInodeNum == -ENOENT) {
+			return -ENOENT;
+		}
+	}
+
+	FILE* fp = fopen(imgPath, "r+");
+	if(fp == NULL) {
+		perror("Failed to open imgdisk.\n");
+		return -ENOENT;
+	}
+	
+	// 读Inode
+	struct inode* ptrInode = malloc(sizeof(struct inode));
+	struct fileObj * ptrFileObj = malloc(sizeof(struct fileObj));
+
+	fseek(fp, getInodeOffsetByNum(startInodeNum), SEEK_SET);
+	fread(ptrInode, sizeof(struct inode), 1, fp);
+
+	fseek(fp, getDataOffsetByNum(ptrInode->addr[0]), SEEK_SET);
+	fread(ptrFileObj, sizeof(struct fileObj), 1, fp);
+
+	if(HelpGenFileObjHeadChecksum(ptrFileObj) != ptrFileObj->checksum) {
+		//非文件，为目录
+		free(ptrInode);
+		free(ptrFileObj);
+		fclose(fp);
+		return -EISDIR;
+	}
+
+	// 分离得到父目录
+	char *parent = malloc(pathLength);
+	strcpy(parent, path);
+	char *temp = strrchr(parent, '/');
+	*temp = '\0';
+	int anotherStartNum = 1;
+	for(char* pParentNext = parent; !IsReachPathEnd(pParentNext); ) {
+		anotherStartNum = HelpWalkPath(pParentNext, anotherStartNum, &pParentNext);
+		if(anotherStartNum == -ENOENT) {
+			return -ENOENT; //理论上此情况不会发生。因为文件存在必然父目录存在
+		}
+	} // 此后 anotherStartNum 为 父目录的Inode号
+
+	// 获取使用的磁盘块，不清零，故在write前需要对Data位图标记为0的块进行清零，read不应该读取Data标记为0的块
+	struct bitmap_inode* ptrBi = malloc(sizeof(struct bitmap_inode));
+	struct bitmap_dblock* ptrDb = malloc(sizeof(struct bitmap_dblock));
+
+	fseek(fp, getInodeBitmapOffset(), SEEK_SET);
+	fread(ptrBi, sizeof(struct bitmap_inode), 1, fp);
+	
+	fseek(fp, getDataBitmapOffset(), SEEK_SET);
+	fread(ptrDb, sizeof(struct bitmap_dblock), 1, fp);
+
+	// 重新标记Inode 与 Data 位图
+	AddrNode* addrListHead =  HelpWalkInodeTable(fp, ptrInode);
+	int curIndex = -1;
+	for(AddrNode* addrCur = addrListHead; addrCur!=NULL;) {
+		int res = ReadAddrList(&addrCur, &curIndex);
+		if(res == -1) {
+			break;
+		}
+		setBitmapValue(ptrDb, res, 0);
+	}
+
+	setBitmapValue(ptrBi, ptrInode->st_ino, 0);
+
+	fseek(fp, getInodeBitmapOffset(), SEEK_SET);
+	fwrite(ptrBi, sizeof(struct bitmap_inode), 1, fp);
+	
+	fseek(fp, getDataBitmapOffset(), SEEK_SET);
+	fwrite(ptrDb, sizeof(struct bitmap_dblock), 1, fp);
+	
+	// 重写父目录
+	fseek(fp, getInodeOffsetByNum(anotherStartNum), SEEK_SET);
+	struct inode* ptrParentInode = malloc(sizeof(struct inode));
+	fread(ptrParentInode, sizeof(struct inode), 1, fp);
+
+	fseek(fp, getDataOffsetByNum(ptrParentInode->addr[0]), SEEK_SET);
+	struct dentry* ptrParentEntry = malloc(sizeof(struct dentry));
+	fread(ptrParentEntry, sizeof(struct dentry), 1, fp);
+
+	for(int i=0; i < max_child_count; i++) {
+		if(ptrParentEntry->childInodeNo[i] == ptrInode->st_ino) {
+			ptrParentEntry->childInodeNo[i] = 0;
+		}
+	}
+
+	fseek(fp, getDataOffsetByNum(ptrParentInode->addr[0]), SEEK_SET);
+	fwrite(ptrParentEntry, sizeof(struct dentry), 1, fp);
+
+	// 清空文件 Inode 与 文件头(mknod不检测脏数据)
+	fseek(fp, getDataOffsetByNum(ptrInode->addr[0]), SEEK_SET);
+	char* empty = malloc(fs_bl_size);
+	memset(empty, 0, fs_bl_size);
+	fwrite(empty, fs_bl_size, 1 ,fp);
+
+	fseek(fp, getInodeOffsetByNum(ptrInode->st_ino), SEEK_SET);
+	fwrite(empty, sizeof(struct inode), 1, fp);
+	
+	// 清理
+	free(empty);
+	free(ptrParentEntry);
+	free(ptrParentInode);
+	free(ptrBi);
+	free(ptrDb);
+	FreeAddrList(addrListHead);
+	free(parent);
+	free(ptrInode);
+	free(ptrFileObj);
+	fclose(fp);
 	return 0;
 }
 
