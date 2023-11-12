@@ -257,7 +257,7 @@ void ReadThirdIndirect(FILE* fp, short blockNum, AddrNode** pCurrent, short* cur
 }
 #undef PrepareAction
 
-// fp为ImgDisk 文件对象,通过外部传入以避免频繁涉及文件打开关闭操作
+// fp为ImgDisk 文件对象,通过外部传入以避免频繁涉及文件打开关闭操作，返回结果链表头部指针
 AddrNode* HelpWalkInodeTable(FILE* fp ,struct inode* pIonde)
 {
     //addr[0]-addr[3]是直接地址，addr[4]是一次间接，addr[5]是二次间接，addr[6]是三次间接。

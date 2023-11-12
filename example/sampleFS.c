@@ -407,20 +407,71 @@ static int SFS_read(const char *path, char *buf, size_t size, off_t offset,
 		      struct fuse_file_info *fi)
 {
 	printf("SFS_Read is called.\tpath: %s\n", path);
-	size_t len;
-	(void) fi;
-	if(strcmp(path+1, options.filename) != 0)
+	
+	// 查找文件Inode
+	int startInodeNum = 1;
+	for(char* pNext = path; !IsReachPathEnd(pNext);) {
+		startInodeNum = HelpWalkPath(pNext, startInodeNum, &pNext);
+		if(startInodeNum == -ENOENT) {
+			perror("Failed to locate file.\n");
+			return -ENOENT;
+		}
+	}
+	// 读出 Inode
+	FILE* fp = fopen(imgPath, "r+");
+	if(fp == NULL) {
+		perror("Failed to open Imgdisk.\n");
 		return -ENOENT;
+	}
+	struct inode* ptrInode = malloc(sizeof(struct inode));
+	fseek(fp, getInodeOffsetByNum(startInodeNum), SEEK_SET);
+	fread(ptrInode, sizeof(struct inode), 1, fp);
 
-	len = strlen(options.contents);
-	if (offset < len) {
-		if (offset + size > len)
-			size = len - offset;
-		memcpy(buf, options.contents + offset, size);
-	} else
-		size = 0;
+	// 获取 所有 文件块
+	AddrNode* pAddrHead = HelpWalkInodeTable(fp, ptrInode);
+	int curInodeIndex = -1;
+	int res = -1;
 
-	return size;
+	struct fileObj* ptrFileObj = malloc(sizeof(struct fileObj));
+	int IsFirstBlock = 1;
+
+	char* ptrBuf = buf; // 定义读写指针
+	int read_size = 0;
+
+	for(AddrNode* pCurrent = pAddrHead; pCurrent!=NULL;) {
+		res = ReadAddrList(&pCurrent, &curInodeIndex);
+		if(res == -1) {
+			break;
+		}
+		// res 为文件内容磁盘地址块号
+		fseek(fp, getDataOffsetByNum(res), SEEK_SET);
+
+		if(IsFirstBlock) { // 读取文件头
+			IsFirstBlock = 0;
+			fread(ptrFileObj, sizeof(struct fileObj), 1, fp);
+			if(ptrFileObj->checksum != HelpGenFileObjHeadChecksum(ptrFileObj)) { // 为目录
+				free(ptrInode);
+				free(ptrFileObj);
+				fclose(fp);
+				FreeAddrList(pAddrHead);
+				return -EISDIR;
+			}
+			printf("SFS_read\tReading file: %s.%s", ptrFileObj->fileName, ptrFileObj->postFix); //简单的调试输出(若无扩展名可能不美观，当然可以改用HelpConcatFileName辅助函数，此处为了简单)
+		}
+		else { // 读取文件具体内容
+			read_size += fread(ptrBuf, fs_bl_size, 1, fp);
+			ptrBuf += read_size; // 向后移动指针
+		}
+	}
+
+	// 清理
+	free(ptrInode);
+	free(ptrFileObj);
+	fclose(fp);
+	FreeAddrList(pAddrHead);
+
+	// 返回读取的文件大小
+	return read_size;
 }
 
 /*注意：为了简化实现，不支持存在与直接父目录同名的子目录。若实在有必要，可考虑建立中间过渡目录。
@@ -725,12 +776,23 @@ int SFS_rmdir(const char *path)
 	return 0;
 }
 
-/*注意：由于 mknod 命令仅支持 字符设备、块设备、FIFO设备类型，故为了简化实现：
-外部应使用 "mknod filename c 0 0 "
-进行创建文件，这是因为fuse框架会对文件属性进行回调检测，否则将导致报错*/
+/*注意：支持使用 mknod filename c 0 0 创建字符设备文件。
+由于实现了 .create 故touch命令将调用 SFS_create */
 int SFS_mknod(const char *path, mode_t mode,dev_t rdev)
 {
-	printf("SFS_mknod is called.\tpath: %s\tdev: %d\n", path, rdev);
+	return HelpCreateFile(path, mode, __S_IFCHR);
+}
+
+/*支持通过 touch filename 命令创建普通文件*/
+int SFS_create(const char *path, mode_t mode, struct fuse_file_info *)
+{
+	return HelpCreateFile(path, mode, __S_IFREG);
+}
+
+
+int HelpCreateFile(const char *path, mode_t mode, mode_t attach_mode)
+{
+	printf("SFS_mknod is called.\tpath: %s\n", path);
 	int count = 0;
 	for(char *temp = path; *temp!='\0'; temp++) {
 		if(*temp == '/') {
@@ -878,7 +940,7 @@ int SFS_mknod(const char *path, mode_t mode,dev_t rdev)
 	
 	ptrNewInode->addr[0] = avail_dataBlockNo;
 	timespec_get(&ptrNewInode->st_atim, TIME_UTC);
-	ptrNewInode->st_mode = mode | __S_IFCHR; // 赋予 __S_IFCHR 权限，以通过框架检测
+	ptrNewInode->st_mode = mode | attach_mode; // 赋予 __S_IFREG 或 __ S_IFCHR 权限，以通过权限检测
 	ptrNewInode->st_ino = avail_InodeNo;
 
 	// 继承父目录属性
@@ -1050,6 +1112,36 @@ int SFS_unlink(const char *path)
 	return 0;
 }
 
+int SFS_utimens (const char *path, const struct timespec tv[2], struct fuse_file_info *fi)
+{
+	int startInodeNum = 1;
+	for(char* pNext = path; !IsReachPathEnd(&pNext);) {
+		startInodeNum = HelpWalkPath(pNext, startInodeNum, &pNext);
+		if(startInodeNum == -ENOENT) {
+			return -ENOENT;
+		}
+	}
+
+	FILE* fp = fopen(imgPath, "r+");
+	if(fp == NULL) {
+		perror("Cannot open Imgdisk.\n");
+		return -ENOENT;
+	}
+	struct inode* ptrInode = malloc(sizeof(struct inode));
+	fseek(fp, getInodeOffsetByNum(startInodeNum), SEEK_SET);
+	fread(ptrInode, sizeof(struct inode), 1, fp);
+
+	ptrInode->st_atim = tv[0];
+	fseek(fp, getInodeOffsetByNum(startInodeNum), SEEK_SET);
+	fwrite(ptrInode, sizeof(struct inode), 1, fp);
+
+	fclose(fp);
+	free(ptrInode);
+
+	return 0;
+}
+
+
 static const struct fuse_operations hello_oper = {
 	.init       = SFS_init,
 	.getattr	= SFS_getattr,
@@ -1059,6 +1151,8 @@ static const struct fuse_operations hello_oper = {
     .mkdir      = SFS_mkdir,
     .rmdir      = SFS_rmdir,
     .mknod      = SFS_mknod,
+	.create		= SFS_create,
+	.utimens	= SFS_utimens,
     .write      = SFS_write,
     .unlink     = SFS_unlink
 };
