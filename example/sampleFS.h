@@ -23,6 +23,12 @@ const int dataBitmap_count = 4;
 const int inode_count = 512;
 const int dataBlock_count = 15866; // 8*1024*1024/512-1-1-4-512=15866
 
+ // 定义地址level 的起始地址，按顺序读写，从level_0 开始，填满一个层级再到下一级
+const int level_0 = 0; // 直接
+const int level_1 = 4; // 一级间接
+const int level_2 = 5; // 二级间接
+const int level_3 = 6; // 三级间接
+
 // 数据结构定义
 struct inode { 
     short int st_mode; /* 权限，2字节 */ 
@@ -38,6 +44,7 @@ struct inode {
     char __reserve[17]; // 填充为 64 字节 
 };
 
+// 为了简化且实现文件系统的易扩展性，目录头/文件头 设计为单独占一块，如此考虑是因为可以可以在往后很方便地实现扩展而不影响文件内容
 struct dentry // 由于目录本质上也是一种文件，故文件也采用此结构体
 {
     char fileName[9]; // 文件名(预留一个终止符位置)
@@ -263,12 +270,6 @@ AddrNode* HelpWalkInodeTable(FILE* fp ,struct inode* pIonde)
     //addr[0]-addr[3]是直接地址，addr[4]是一次间接，addr[5]是二次间接，addr[6]是三次间接。
     short *addArray = pIonde->addr;
 
-    // 定义地址level 的起始地址，按顺序读写，从level_0 开始，填满一个层级再到下一级
-    const int level_0 = 0;
-    const int level_1 = 4;
-    const int level_2 = 5;
-    const int level_3 = 6;
-
     /*因为 每个块可最多容纳： 512 / 2 = 256 个磁盘地址块号，一次性返回如此大且大概率用不到的空间是不合理的。
     但由于本文件系统不支持Random Access，可利用逻辑空间的连续性，动态获取，当读取后其中一块未利用时，认为后续都未利用。
     另外就是：间接块将放置在数据区。
@@ -298,4 +299,97 @@ AddrNode* HelpWalkInodeTable(FILE* fp ,struct inode* pIonde)
     }
     
     return pHead; // 返回链表头
+}
+
+/*辅助申请一块可用块用于写入，通过链表方式维护所有块，并最后进行整理。请在外部保存好链表头指针、当前链表节点指针、当前读写索引位置.
+若成功，函数返回可用磁盘块的块号，否则返回-1.
+调用前请通过调用CreateListHead创建地址维护列表，并妥善保存相关状态量*/
+short HelpAllocDataBlock(FILE* fp, AddrNode** ppCurrent, int* ptrNewAddNumIndex)
+{
+    struct bitmap_dblock* ptrDb = malloc(sizeof(struct bitmap_dblock));
+    fseek(fp, getDataBitmapOffset(), SEEK_SET);
+    fread(ptrDb, sizeof(struct bitmap_dblock), 1, fp);
+
+    int available_block_num = 0;
+    for(int i = 1; i <= dataBitmap_count ; i++) {
+        if(getBitmapValue(ptrDb, i) == 0) {
+            available_block_num = i;
+            setBitmapValue(ptrDb, i, 1);
+            break;
+        }
+    }
+    if(available_block_num == 0) {
+        perror("No more space for write.\n");
+        return -1; // 返回 -1 用于外部检查
+    }
+    AddAddrToListTail(ppCurrent, ptrNewAddNumIndex, available_block_num);
+
+    // 修改位图
+    fseek(fp, getDataBitmapOffset(), SEEK_SET);
+    fwrite(ptrDb, sizeof(struct bitmap_dblock), 1, fp);
+    // 清理
+    free(ptrDb);
+    
+    return available_block_num;
+}
+
+/*下次写入安全返回状态1，下次写入将溢出返回状态0
+注意：请在外部更新 writer*/
+int HelpWriteIndirect(short* writer/*本次写入位置*/, char* pMemHead, short AddrNum)
+{
+    *writer = AddrNum;
+
+    // 预测下次是否溢出
+    writer++;
+    if(writer > pMemHead + fs_bl_size) { //溢出
+        return 0;
+    }
+    
+    return 1;
+}
+
+/*辅助将所有使用的地址块合理填入Inode,成功返回0*/
+int HelpTidyAddr(FILE* fp, AddrNode* pHead, struct inode* ptrInode)
+{
+    short* pAddr = ptrInode->addr;
+    if(pHead == NULL) {
+        perror("Empty Addr List.\n");
+        return -1;
+    }
+    
+    // 从 arr[1] 开始，arr[0]为文件头
+    int curIndex = -1;
+    int res = -1;
+    int AddrCount = 1; // 从addr[1]开始写文件内容，addr[0]为文件头
+
+    char* Indirect[3] = {NULL};
+    short *writer = NULL;
+    char* pMemHead = NULL; 
+
+    int goNextStage = 0;
+    int IndirectLevel = 0;
+
+    for(AddrNode* pCurrent = pHead; pCurrent!=NULL;) {
+        res = ReadAddrList(&pCurrent, &curIndex);
+        if(res == -1) { // 无更多块，可终止
+            break;
+        }
+        if(level_0 <= AddrCount && AddrCount < level_1) { // 处理为直接地址
+            pAddr[AddrCount] = res;
+            AddrCount++;
+        } else { //处理间接地址
+            if(goNextStage) {
+                AddrCount++;
+                IndirectLevel++;
+                if(AddrCount > level_3) {
+                    perror("File is too large. Automatically truncate.\n");
+                    return -EFBIG; //文件过大
+                }
+
+            } else {
+                goNextStage = HelpWriteIndirect(writer, Indirect[IndirectLevel], res);
+                writer++;
+            }
+        }
+    }
 }

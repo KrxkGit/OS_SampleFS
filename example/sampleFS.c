@@ -783,7 +783,7 @@ int SFS_mknod(const char *path, mode_t mode,dev_t rdev)
 	return HelpCreateFile(path, mode, __S_IFCHR);
 }
 
-/*支持通过 touch filename 命令创建普通文件*/
+/*支持通过 touch filename 命令创建普通文件，同时支持touch命令修改文件时间*/
 int SFS_create(const char *path, mode_t mode, struct fuse_file_info *)
 {
 	return HelpCreateFile(path, mode, __S_IFREG);
@@ -988,7 +988,29 @@ int HelpCreateFile(const char *path, mode_t mode, mode_t attach_mode)
 int SFS_write(const char *path, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
  {
 	printf("Write path: %s\n", path);
-	printf("Content in buf: %s\n", buf);
+	
+	FILE *fp = fopen(imgPath, "r+");
+	if(fp == NULL) {
+		perror("Failed to open ImgDisk.\n");
+		return -ENOENT;
+	}
+	int startInodeNum = 1;
+	for(char*pNext = path;!IsReachPathEnd(pNext);) {
+		startInodeNum = HelpWalkPath(pNext, startInodeNum, &pNext);
+		if(startInodeNum == -ENOENT) {
+			perror("Failed to find the file\n");
+			return -ENOENT;
+		}
+	} // 此后startInodeNum 保存了文件的Inode号
+
+	// 读出文件的 Inode
+	struct inode* ptrInode = malloc(sizeof(struct inode));
+	// struct fileObj* ptrFileObj = malloc(sizeof(struct fileObj)); // 由于目前仅修改文件内容，故不考虑文件头部数据
+	fseek(fp, getInodeOffsetByNum(startInodeNum), SEEK_SET);
+	fread(ptrInode, sizeof(struct inode), 1, fp);
+
+	// 接下来是写入数据，从ptrInode->addr[1]开始
+
 	return 16;
  }
 
