@@ -1112,10 +1112,11 @@ int SFS_unlink(const char *path)
 	return 0;
 }
 
+/*touch 命令修改文件时间*/
 int SFS_utimens (const char *path, const struct timespec tv[2], struct fuse_file_info *fi)
 {
 	int startInodeNum = 1;
-	for(char* pNext = path; !IsReachPathEnd(&pNext);) {
+	for(char* pNext = path; !IsReachPathEnd(pNext);) {
 		startInodeNum = HelpWalkPath(pNext, startInodeNum, &pNext);
 		if(startInodeNum == -ENOENT) {
 			return -ENOENT;
