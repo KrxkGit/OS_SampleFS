@@ -1283,14 +1283,24 @@ static const struct fuse_operations hello_oper = {
 
 static void show_help(const char *progname)
 {
-    printf("Welcome to use sampleFS Developed by Krxk.\n");
+    printf("Welcome to use sampleFS Developed by Krxk.\n\n");
 	printf("usage: %s [options] <mountpoint>\n\n", progname);
 	printf("File-system specific options:\n"
-	       "    --name=<s>          Name of the \"hello\" file\n"
-	       "                        (default: \"hello\")\n"
-	       "    --contents=<s>      Contents \"hello\" file\n"
-	       "                        (default \"Hello, World!\\n\")\n"
-	       "\n");
+	       "    -d		Run as Debug Mode\n");
+
+	printf("\n");
+
+	printf("Tips:\t"
+	"Once you mount the file system:\n\n"
+	"You could use the Shell Commands touch / echo > / ... to Create a file.\n"
+	"You could use the Shell Commands mkdir to build Multi-level directory.\n"
+	"You could use the Shell Commands rm / rmdir respectively to remove a file and a empty directory.\n"
+	"You could use the Shell Commands cat / ... to Read a file."
+	"You also could use the the Shell Command likes 'mknod myfile c 0 0' to create a character device file."
+	"What's more, wildcards such as * are supported when you use rm/rmdir/...\n");
+
+	printf("\n");
+
 }
 
 int main(int argc, char *argv[])
