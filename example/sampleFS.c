@@ -403,75 +403,134 @@ static int SFS_open(const char *path, struct fuse_file_info *fi)
 	return 0;
 }
 
+/*提示：可使用Shell 命令 cat file 进行读取*/
 static int SFS_read(const char *path, char *buf, size_t size, off_t offset,
-		      struct fuse_file_info *fi)
+					struct fuse_file_info *fi)
 {
 	printf("SFS_Read is called.\tpath: %s\n", path);
-	
+
+	memset(buf, 0, size);
+
 	// 查找文件Inode
 	int startInodeNum = 1;
-	for(char* pNext = path; !IsReachPathEnd(pNext);) {
+
+	char* pCopy = malloc(strlen(path) + 1);
+	pCopy[0] = '\0';
+	strcpy(pCopy, path);
+
+	for (char *pNext = pCopy; !IsReachPathEnd(pNext);)
+	{
 		startInodeNum = HelpWalkPath(pNext, startInodeNum, &pNext);
-		if(startInodeNum == -ENOENT) {
+		if (startInodeNum == -ENOENT)
+		{
 			perror("Failed to locate file.\n");
 			return -ENOENT;
 		}
 	}
+	free(pCopy);
 	// 读出 Inode
-	FILE* fp = fopen(imgPath, "r+");
-	if(fp == NULL) {
+	FILE *fp = fopen(imgPath, "r+");
+	if (fp == NULL)
+	{
 		perror("Failed to open Imgdisk.\n");
 		return -ENOENT;
 	}
-	struct inode* ptrInode = malloc(sizeof(struct inode));
+	struct inode *ptrInode = malloc(sizeof(struct inode));
 	fseek(fp, getInodeOffsetByNum(startInodeNum), SEEK_SET);
 	fread(ptrInode, sizeof(struct inode), 1, fp);
 
-	// 获取 所有 文件块
-	AddrNode* pAddrHead = HelpWalkInodeTable(fp, ptrInode);
-	int curInodeIndex = -1;
-	int res = -1;
-
-	struct fileObj* ptrFileObj = malloc(sizeof(struct fileObj));
-	int IsFirstBlock = 1;
-
-	char* ptrBuf = buf; // 定义读写指针
-	int read_size = 0;
-
-	for(AddrNode* pCurrent = pAddrHead; pCurrent!=NULL;) {
-		res = ReadAddrList(&pCurrent, &curInodeIndex);
-		if(res == -1) {
-			break;
+	if (ReadCache == NULL) { 
+		// 建立缓冲区
+		int length = ptrInode->st_size - sizeof(struct fileObj);
+		ReadCache = malloc(length);
+		if(ReadCache == NULL) {
+			perror("No more Memory.\n");
+			return -EOF;
 		}
-		// res 为文件内容磁盘地址块号
-		fseek(fp, getDataOffsetByNum(res), SEEK_SET);
+		memset(ReadCache, 0, length);
 
-		if(IsFirstBlock) { // 读取文件头
-			IsFirstBlock = 0;
-			fread(ptrFileObj, sizeof(struct fileObj), 1, fp);
-			if(ptrFileObj->checksum != HelpGenFileObjHeadChecksum(ptrFileObj)) { // 为目录
-				free(ptrInode);
-				free(ptrFileObj);
-				fclose(fp);
-				FreeAddrList(pAddrHead);
-				return -EISDIR;
+		// 获取 所有 文件块
+		AddrNode *pAddrHead = HelpWalkInodeTable(fp, ptrInode);
+		int curInodeIndex = -1;
+		int res = -1;
+
+		struct fileObj *ptrFileObj = malloc(sizeof(struct fileObj));
+		int IsFirstBlock = 1;
+
+		char *ptrBuf = ReadCache; // 定义读写指针
+		int NeedRead = ptrInode->st_size - sizeof(struct fileObj);
+		int read_size = 0;
+
+		for (AddrNode *pCurrent = pAddrHead; pCurrent != NULL;) {
+			res = ReadAddrList(&pCurrent, &curInodeIndex);
+			if (res == -1)
+			{
+				break;
 			}
-			printf("SFS_read\tReading file: %s.%s", ptrFileObj->fileName, ptrFileObj->postFix); //简单的调试输出(若无扩展名可能不美观，当然可以改用HelpConcatFileName辅助函数，此处为了简单)
+			// res 为文件内容磁盘地址块号
+			if(fseek(fp, getDataOffsetByNum(res), SEEK_SET) != 0) {
+				perror("Cannot seek imgdisk.\n");
+			}
+
+			if (IsFirstBlock)
+			{ // 读取文件头
+				IsFirstBlock = 0;
+				fread(ptrFileObj, sizeof(struct fileObj), 1, fp);
+				if (ptrFileObj->checksum != HelpGenFileObjHeadChecksum(ptrFileObj))
+				{ // 为目录
+					free(ptrInode);
+					free(ptrFileObj);
+					fclose(fp);
+					FreeAddrList(pAddrHead);
+					return -EISDIR;
+				}
+				printf("SFS_read\tReading file: %s.%s\n", ptrFileObj->fileName, ptrFileObj->postFix); // 简单的调试输出(若无扩展名可能不美观，当然可以改用HelpConcatFileName辅助函数，此处为了简单)
+			}
+			else {
+				// 读取文件具体内容
+				while(1) {
+					int modValue =  NeedRead % fs_bl_size; // 以块为周期(整体)
+					// printf("%d\n", modValue);
+					int rs = fread(ptrBuf, modValue, 1, fp); 
+					if(rs != 1) {
+						perror("Fail happens when reading.\n");
+					}
+					read_size += rs * modValue;
+					printf("Read get: %s\n", ptrBuf);
+					if(read_size >= NeedRead) { // 保证不超出文件大小
+						ReadFinish = 1;
+						break;
+					}
+					ptrBuf += read_size; // 向后移动指针
+				}
+			}
 		}
-		else { // 读取文件具体内容
-			read_size += fread(ptrBuf, fs_bl_size, 1, fp);
-			ptrBuf += read_size; // 向后移动指针
-		}
+		// 清理
+		free(ptrFileObj);
+		FreeAddrList(pAddrHead);
+		// ReadCache[NeedRead]
+	} 
+	
+	memset(buf, 0, size);
+	int coreSize = ptrInode->st_size - sizeof(struct fileObj);
+
+	memcpy(buf, ReadCache + offset, size - sizeof(struct fileObj));
+	if((offset + 1)*Native_block_size >= coreSize) {
+		free(ReadCache);
+		ReadCache = NULL;
+		ReadFinish = 0;
 	}
 
+	
+	int returnValue = (size > coreSize)? coreSize : size;
 	// 清理
 	free(ptrInode);
-	free(ptrFileObj);
 	fclose(fp);
-	FreeAddrList(pAddrHead);
+	
+	fflush(stdout);
 
 	// 返回读取的文件大小
-	return read_size;
+	return returnValue;
 }
 
 /*注意：为了简化实现，不支持存在与直接父目录同名的子目录。若实在有必要，可考虑建立中间过渡目录。
@@ -783,9 +842,16 @@ int SFS_mknod(const char *path, mode_t mode,dev_t rdev)
 	return HelpCreateFile(path, mode, __S_IFCHR);
 }
 
-/*支持通过 touch filename 命令创建普通文件，同时支持touch命令修改文件时间*/
+/*支持通过 touch filename 命令创建普通文件，同时支持touch命令修改文件时间
+也可通过输出重定向方式创建普通文件*/
 int SFS_create(const char *path, mode_t mode, struct fuse_file_info *)
 {
+	// 先删除文件
+	char* pCopy = malloc(strlen(path) + 1);
+	pCopy[0] = '\0';
+	strcpy(pCopy, path);
+	SFS_unlink(pCopy);
+
 	return HelpCreateFile(path, mode, __S_IFREG);
 }
 
@@ -985,6 +1051,7 @@ int HelpCreateFile(const char *path, mode_t mode, mode_t attach_mode)
 	return 0;
 }
 
+/*提示：可通过shell 命令 echo "content your want" > file 进行写入*/
 int SFS_write(const char *path, const char *buf, size_t size, off_t off, struct fuse_file_info *fi)
  {
 	printf("Write path: %s\n", path);
@@ -1010,8 +1077,42 @@ int SFS_write(const char *path, const char *buf, size_t size, off_t off, struct 
 	fread(ptrInode, sizeof(struct inode), 1, fp);
 
 	// 接下来是写入数据，从ptrInode->addr[1]开始
+	char* pWrite = malloc(fs_bl_size);
+	char* curPointer = buf;
+	int writeSize = size;
+	AddrNode* pHead = CreateListHead();
+	AddrNode* pCurrent = pHead;
+	int curIndex = 0;
 
-	return 16;
+	while(1) {
+		int s = writeSize % fs_bl_size;
+		if(s <= 0) {
+			break;
+		}
+		int availableNum = HelpAllocDataBlock(fp, &pCurrent, &curIndex);
+		memset(pWrite, 0, fs_bl_size);
+		memcpy(pWrite, curPointer, s);
+		fseek(fp, getDataOffsetByNum(availableNum), SEEK_SET);
+		fwrite(pWrite, fs_bl_size, 1, fp);
+		writeSize -= s;
+	}
+	
+
+	HelpTidyAddr(fp, pHead, ptrInode);
+	
+	// ptrInode->st_size += size;
+	ptrInode->st_size = sizeof(struct fileObj) + size;
+	fseek(fp, getInodeOffsetByNum(ptrInode->st_ino), SEEK_SET);
+	fwrite(ptrInode, sizeof(struct inode), 1, fp);
+
+	
+	// 清理
+	fclose(fp);
+	free(pWrite);
+	FreeAddrList(pHead);
+	free(ptrInode);
+
+	return size;
  }
 
 int SFS_unlink(const char *path)
