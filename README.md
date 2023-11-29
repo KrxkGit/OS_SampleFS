@@ -1,159 +1,124 @@
-libfuse
-=======
+# 🎉SampleFS 使用说明
 
-About
------
+## ▶重新构建
 
-FUSE (Filesystem in Userspace) is an interface for userspace programs
-to export a filesystem to the Linux kernel. The FUSE project consists
-of two components: the *fuse* kernel module (maintained in the regular
-kernel repositories) and the *libfuse* userspace library (maintained
-in this repository). libfuse provides the reference implementation
-for communicating with the FUSE kernel module.
+由于 *SampleFS* 管理的磁盘依赖于绝对路径，为了能够在其他设备使用本系统，需要重新构建本程序。
 
-A FUSE file system is typically implemented as a standalone
-application that links with libfuse. libfuse provides functions to
-mount the file system, unmount it, read requests from the kernel, and
-send responses back. libfuse offers two APIs: a "high-level",
-synchronous API, and a "low-level" asynchronous API. In both cases,
-incoming requests from the kernel are passed to the main program using
-callbacks. When using the high-level API, the callbacks may work with
-file names and paths instead of inodes, and processing of a request
-finishes when the callback function returns. When using the low-level
-API, the callbacks must work with inodes and responses must be sent
-explicitly using a separate set of API functions.
+### 1️⃣修改磁盘文件路径
 
+```sh
+cd OS_SampleFS/example
+vim sampleFS.h
+```
 
-Development Status
-------------------
+修改位于第14行的磁盘路径：
 
-libfuse is shipped by all major Linux distributions and has been in
-production use across a wide range of systems for many years. However,
-at present libfuse does not have any active, regular contributors. The
-current maintainer continues to apply pull requests and makes regular
-releases, but unfortunately has no capacity to do any development
-beyond addressing high-impact issues. When reporting bugs, please
-understand that unless you are including a pull request or are
-reporting a critical issue, you will probably not get a response. If
-you are using libfuse, please consider contributing to the project.
+```c
+char imgPath[] = "/home/krxk/fuse-3.16.2/build/example/SFS_Img"; // 设备载体
+```
 
+### 2️⃣构建
 
-Supported Platforms
--------------------
+回到根目录，执行
 
-* Linux (fully)
-* BSD (mostly/best-effort)
-* For OS-X, please use [OSXFUSE](https://osxfuse.github.io/)
-  
+```sh
+cd OS_SampleFS/build
+ninja
+```
 
-Installation
-------------
+即可重新编译构建。
 
-You can download libfuse from https://github.com/libfuse/libfuse/releases. To build and
-install, you must use [Meson](http://mesonbuild.com/) and
-[Ninja](https://ninja-build.org).  After downloading the tarball and `.sig` file, verify
-it using [signify](https://www.openbsd.org/papers/bsdcan-signify.html):
+生成输出文件位于 build/example中。
 
-    signify -V -m fuse-X.Y.Z.tar.gz -p fuse-X.Y.pub
-    
-The `fuse-X.Y.pub` file contains the signing key and needs to be obtained from a
-trustworthy source. Each libfuse release contains the signing key for the release after it
-in the `signify` directory, so you only need to manually acquire this file once when you
-install libfuse for the first time.
+## ✅帮助文档
 
-After you have validated the tarball, extract it, create a (temporary) build directory and
-run Meson:
+### 1️⃣创建磁盘文件
 
-    $ tar xzf fuse-X.Y.Z.tar.gz; cd fuse-X.Y.Z
-    $ mkdir build; cd build
-    $ meson setup ..
+执行
 
-Normally, the default build options will work fine. If you
-nevertheless want to adjust them, you can do so with the
-*meson configure* command:
+```sh
+cd build/example
+./CreateDiskFile.sh
+```
 
-    $ meson configure # list options
-    $ meson configure -D disable-mtab=true # set an option
+创建磁盘文件*SFS_Img*
 
-To build, test, and install libfuse, you then use Ninja:
+### 2️⃣初始化文件系统
 
-    $ ninja
-    $ sudo python3 -m pytest test/
-    $ sudo ninja install
+执行
 
-Running the tests requires the [py.test](http://www.pytest.org/)
-Python module. Instead of running the tests as root, the majority of
-tests can also be run as a regular user if *util/fusermount3* is made
-setuid root first:
+```sh
+./init_disk
+```
 
-    $ sudo chown root:root util/fusermount3
-    $ sudo chmod 4755 util/fusermount3
-    $ python3 -m pytest test/
+初始化文件系统。
 
-Security implications
----------------------
+### ✔SampleFS 支持的操作
 
-The *fusermount3* program is installed setuid root. This is done to
-allow normal users to mount their own filesystem implementations.
+#### ❔查看帮助
 
-To limit the harm that malicious users can do this way, *fusermount3*
-enforces the following limitations:
+运行
 
-  - The user can only mount on a mountpoint for which they have write
-    permission
+```sh
+./sampleFS --help
+```
 
-  - The mountpoint must not be a sticky directory which isn't owned by
-    the user (like /tmp usually is)
+可查看使用文件系统使用说明。
 
-  - No other user (including root) can access the contents of the
-    mounted filesystem (though this can be relaxed by allowing the use
-    of the *allow_other* and *allow_root* mount options in
-    */etc/fuse.conf*)
+#### 🟣挂载文件系统
 
+在源代码根目录下，执行
 
-If you intend to use the *allow_other* mount options, be aware that
-FUSE has an unresolved [security
-bug](https://github.com/libfuse/libfuse/issues/15): if the
-*default_permissions* mount option is not used, the results of the
-first permission check performed by the file system for a directory
-entry will be re-used for subsequent accesses as long as the inode of
-the accessed entry is present in the kernel cache - even if the
-permissions have since changed, and even if the subsequent access is
-made by a different user. This is of little concern if the filesystem
-is accessible only to the mounting user (which has full access to the
-filesystem anyway), but becomes a security issue when other users are
-allowed to access the filesystem (since they can exploit this to
-perform operations on the filesystem that they do not actually have
-permissions for).
+```sh
+cd build/example
+mkdir Krxk # Krxk 可以是任意挂载的目标目录
+./sampleFS Krxk
+```
 
-This bug needs to be fixed in the Linux kernel and has been known
-since 2006 but unfortunately no fix has been applied yet. If you
-depend on correct permission handling for FUSE file systems, the only
-workaround is to use `default_permissions` (which does not currently
-support ACLs), or to completely disable caching of directory entry
-attributes.
+卸载文件系统可执行
 
-Building your own filesystem
-------------------------------
+```sh
+umount Krxk
+```
 
-FUSE comes with several example file systems in the `example`
-directory. For example, the *passthrough* examples mirror the contents
-of the root directory under the mountpoint. Start from there and adapt
-the code!
+#### 🆗支持的文件操作
 
-The documentation of the API functions and necessary callbacks is
-mostly contained in the files `include/fuse.h` (for the high-level
-API) and `include/fuse_lowlevel.h` (for the low-level API). An
-autogenerated html version of the API is available in the `doc/html`
-directory and at http://libfuse.github.io/doxygen.
+❕注意：文件名长度不超过8，扩展名长度不超过3。
 
+```sh
+# 查看文件属性
+stat filename
 
-Getting Help
-------------
+# 查看目录
+ls dirname
+ls -a .
 
-If you need help, please ask on the <fuse-devel@lists.sourceforge.net>
-mailing list (subscribe at
-https://lists.sourceforge.net/lists/listinfo/fuse-devel).
+# 创建多层目录
+mkdir child
+mkdir child2
+cd child
+mkdir ch_ch
+cd ch_ch
+mkdir chchch
 
-Please report any bugs on the GitHub issue tracker at
-https://github.com/libfuse/libfuse/issues.
+# 创建文件
+echo "HelloWorld" > filename
+touch filename
+mknod filename c 0 0
+
+# 删除空目录
+rmdir empty_dirname
+
+# 删除文件
+rm filename
+rm *.txt # 支持通配符形式删除文件
+
+# 写入文件 & 查看文件内容
+echo "Hello" > 1.txt
+cat 1.txt
+
+# 修改文件时间
+touch -d "2023-8-20 16:00" filename
+```
+
+🟡暂未支持的操作：在文件末尾追加内容，文件的写入采取从头覆盖写入的方式。
